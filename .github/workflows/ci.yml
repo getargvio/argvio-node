@@ -1,0 +1,115 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ['22', '24']
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout 🛎
+        uses: actions/checkout@v7
+
+      - name: Setup node env 🏗
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+
+      - name: Install dependencies 👨🏻‍💻
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Format
+        run: npm run format:check
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test -- --coverage
+
+      - name: Benchmark (smoke)
+        run: npm run -w packages/core bench -- --run
+
+      - name: Upload coverage reports to Codecov
+        if: matrix.node-version == '24'
+        uses: codecov/codecov-action@v7
+        with:
+          slug: ${{ github.repository }}
+        env:
+          CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
+
+  peer-versions:
+    name: peer version matrix (${{ matrix.package }} @ ${{ matrix.peer }}@${{ matrix.version }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: yargs
+            peer: yargs
+            version: latest
+          - package: yargs
+            peer: yargs
+            version: previous-minor
+          - package: commander
+            peer: commander
+            version: latest
+          - package: commander
+            peer: commander
+            version: previous-minor
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout 🛎
+        uses: actions/checkout@v7
+
+      - name: Setup node env 🏗
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+          cache: npm
+
+      - name: Install dependencies 👨🏻‍💻
+        run: npm ci
+
+      - name: Build core
+        run: npm run build -w packages/core
+
+      - name: Pin previous minor peer dependency
+        if: matrix.version == 'previous-minor'
+        working-directory: packages/${{ matrix.package }}
+        run: |
+          current="$(npm view ${{ matrix.peer }} version)"
+          previous_minor="$(npm view ${{ matrix.peer }} versions --json | node -e "
+            const versions = JSON.parse(require('fs').readFileSync(0, 'utf8'));
+            const [currentMajor, currentMinor] = '${current}'.split('.').map(Number);
+            const match = versions.reverse().find((v) => {
+              const [major, minor] = v.split('.').map(Number);
+              return major === currentMajor && minor < currentMinor;
+            });
+            console.log(match ?? '${current}');
+          ")"
+          npm install --no-save "${{ matrix.peer }}@${previous_minor}"
+
+      - name: Test
+        run: npm test -w packages/${{ matrix.package }}

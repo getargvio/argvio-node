@@ -1,0 +1,18 @@
+{
+  "name": "yargs-cli-example",
+  "private": true,
+  "description": "Minimal example CLI showing @getargvio/yargs instrumentation",
+  "version": "0.0.0",
+  "type": "module",
+  "bin": {
+    "yargs-cli-example": "./cli.mjs"
+  },
+  "scripts": {
+    "start": "node cli.mjs"
+  },
+  "dependencies": {
+    "@getargvio/argvio": "^0.1.0",
+    "@getargvio/yargs": "^0.1.0",
+    "yargs": "^18"
+  }
+}

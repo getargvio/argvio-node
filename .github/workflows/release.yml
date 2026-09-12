@@ -1,0 +1,99 @@
+name: Publish
+
+on:
+  workflow_run:
+    workflows: [Release Please]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      path:
+        description: 'Package path to publish (e.g. packages/core). Leave empty to publish everything.'
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  compute-matrix:
+    name: Compute released packages
+    runs-on: ubuntu-slim
+    if: ${{ github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      matrix: ${{ steps.compute.outputs.matrix }}
+      has-releases: ${{ steps.compute.outputs.has-releases }}
+
+    permissions:
+      actions: read
+
+    steps:
+      - name: Download release outputs 📥
+        if: ${{ github.event_name == 'workflow_run' }}
+        uses: actions/download-artifact@v8
+        with:
+          name: release-outputs
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute matrix 🔎
+        id: compute
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            if [ -n "${{ inputs.path }}" ]; then
+              paths='["${{ inputs.path }}"]'
+            else
+              paths='["packages/core", "packages/yargs", "packages/commander"]'
+            fi
+          else
+            paths="$(cat release-outputs/paths_released 2>/dev/null || echo '[]')"
+          fi
+          echo "matrix={\"path\":$paths}" >> "$GITHUB_OUTPUT"
+          if [ "$(echo "$paths" | node -e "process.stdin.once('data', d => console.log(JSON.parse(d).length))")" = "0" ]; then
+            echo "has-releases=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has-releases=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  publish:
+    name: Publish ${{ matrix.path }}
+    needs: compute-matrix
+    if: ${{ needs.compute-matrix.outputs.has-releases == 'true' }}
+    strategy:
+      matrix: ${{ fromJson(needs.compute-matrix.outputs.matrix) }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+      packages: write
+
+    steps:
+      - name: Checkout 🛎
+        uses: actions/checkout@v7
+
+      - name: Setup node env 🏗
+        uses: actions/setup-node@v7
+        with:
+          cache: npm
+          node-version-file: '.nvmrc'
+          registry-url: https://registry.npmjs.org
+
+      - name: Install dependencies 👨🏻‍💻
+        run: npm ci
+
+      - name: Build TypeScript 🔨
+        run: npm run build -w ${{ matrix.path }}
+
+      - name: Publish to npm 📦
+        run: npm publish --workspace ${{ matrix.path }} --provenance --no-git-checks
+
+      - name: Setup node env for GitHub Packages 🏗
+        uses: actions/setup-node@v7
+        with:
+          node-version-file: '.nvmrc'
+          registry-url: https://npm.pkg.github.com
+
+      - name: Publish to GitHub Packages 📦
+        run: npm publish --workspace ${{ matrix.path }} --provenance --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

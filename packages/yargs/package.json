@@ -1,0 +1,64 @@
+{
+  "name": "@getargvio/yargs",
+  "description": "Auto-instruments a yargs command tree with @getargvio/argvio CLI usage telemetry",
+  "version": "0.1.0",
+  "author": "getargvio",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/getargvio/argvio-node.git",
+    "directory": "packages/yargs"
+  },
+  "homepage": "https://github.com/getargvio/argvio-node/tree/main/packages/yargs",
+  "bugs": {
+    "url": "https://github.com/getargvio/argvio-node/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "yargs",
+    "cli",
+    "telemetry",
+    "opentelemetry",
+    "analytics"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "yargs": ">=17.0.0"
+  },
+  "dependencies": {
+    "@getargvio/argvio": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "@types/yargs": "^17",
+    "typescript": "^5",
+    "vitest": "^4.1.11",
+    "yargs": "^18"
+  }
+}

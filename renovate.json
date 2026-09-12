@@ -1,0 +1,3 @@
+{
+  "extends": ["github>getargvio/renovate-config"]
+}

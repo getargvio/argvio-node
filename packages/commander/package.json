@@ -1,0 +1,63 @@
+{
+  "name": "@getargvio/commander",
+  "description": "Auto-instruments a commander command tree with @getargvio/argvio CLI usage telemetry",
+  "version": "0.1.0",
+  "author": "getargvio",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/getargvio/argvio-node.git",
+    "directory": "packages/commander"
+  },
+  "homepage": "https://github.com/getargvio/argvio-node/tree/main/packages/commander",
+  "bugs": {
+    "url": "https://github.com/getargvio/argvio-node/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "commander",
+    "cli",
+    "telemetry",
+    "opentelemetry",
+    "analytics"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "commander": ">=12.0.0"
+  },
+  "dependencies": {
+    "@getargvio/argvio": "^0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24",
+    "commander": "^15",
+    "typescript": "^5",
+    "vitest": "^4.1.11"
+  }
+}
