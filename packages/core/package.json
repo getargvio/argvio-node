@@ -1,7 +1,7 @@
 {
   "name": "@getargvio/argvio",
   "description": "Node.js SDK for emitting CLI usage telemetry to Argvio's ingest server, built around a client-enforced consent tier model",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "getargvio",
   "type": "module",
   "license": "MIT",
