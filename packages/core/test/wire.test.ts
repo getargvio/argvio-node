@@ -14,9 +14,11 @@ import {
   AttrExitCode,
   AttrFlagNames,
   AttrInstallId,
+  AttrInstallMethod,
   AttrSessionId,
   Client,
   ErrorCategory,
+  EventCommandCompleted,
   EventCommandInvoked,
   EventErrorRaised,
   EventHelpViewed,
@@ -43,12 +45,14 @@ interface SpanRecord {
 function capturingClient(
   tier: Tier,
   installIdPath = join(mkdtempSync(join(tmpdir(), 'argvio-')), 'id'),
+  installMethod?: string,
 ) {
   const logs: LogRecord[] = []
   const spans: SpanRecord[] = []
   const client = new Client({
     cliName: 'testcli',
     installIdPath,
+    installMethod,
     disabled: false,
     initError: null,
     tier,
@@ -96,13 +100,18 @@ describe('wire format', () => {
     expect(event(EventSessionStarted)?.attributes).not.toHaveProperty(AttrInstallId)
     expect(event(EventSessionStarted)?.attributes).not.toHaveProperty(AttrSessionId)
     expect(spans[0]?.attributes).not.toHaveProperty(AttrFlagNames)
+    expect(event(EventCommandCompleted)?.attributes[AttrCommandName]).toBe('sub')
+    expect(event(EventCommandCompleted)?.attributes).not.toHaveProperty(AttrSessionId)
+    expect(event(EventCommandCompleted)?.attributes).not.toHaveProperty(AttrInstallId)
+    expect(event(EventErrorRaised)).toBeUndefined()
   })
 
-  it('adds session, install and flag names at Tier.Basic, but no error type', async () => {
+  it('adds session, install, flag names and the error category at Tier.Basic', async () => {
     const { client, logs, event } = capturingClient(Tier.Basic)
     client.recordSessionStart()
     client.recordSessionStart()
     client.recordCommandInvocation('testcli sub', ['verbose'])
+    client.recordCommand({ path: 'testcli sub', durationMs: 1500, exitCode: 3 })
     client.recordError('testcli sub', ErrorCategory.Internal)
     await client.flush(500)
 
@@ -110,9 +119,32 @@ describe('wire format', () => {
     const started = event(EventSessionStarted)?.attributes ?? {}
     expect(started[AttrInstallId]).toMatch(/^[0-9a-f-]{36}$/)
     expect(started[AttrSessionId]).toBeTruthy()
-    expect(event(EventCommandInvoked)?.attributes[AttrSessionId]).toBe(started[AttrSessionId])
     expect(event(EventCommandInvoked)?.attributes[AttrFlagNames]).toEqual(['verbose'])
-    expect(event(EventErrorRaised)).toBeUndefined()
+
+    // Every later event ties back to the same session and install, so the
+    // server can follow one install across commands.
+    for (const name of [EventCommandInvoked, EventCommandCompleted, EventErrorRaised]) {
+      expect(event(name)?.attributes[AttrSessionId], name).toBe(started[AttrSessionId])
+      expect(event(name)?.attributes[AttrInstallId], name).toBe(started[AttrInstallId])
+    }
+    expect(event(EventCommandCompleted)?.attributes[AttrExitCode]).toBe(3)
+    expect(event(EventCommandCompleted)?.attributes[AttrDurationMs]).toBe(1500)
+    expect(event(EventErrorRaised)?.attributes[AttrErrorType]).toBe('internal')
+    expect(event(EventErrorRaised)?.attributes).not.toHaveProperty(AttrErrorMessage)
+  })
+
+  it('reports the install method at every tier, and only when set', async () => {
+    for (const tier of [Tier.Anonymous, Tier.Basic]) {
+      const { client, event } = capturingClient(tier, undefined, 'brew')
+      client.recordSessionStart()
+      await client.flush(500)
+      expect(event(EventSessionStarted)?.attributes[AttrInstallMethod], String(tier)).toBe('brew')
+    }
+
+    const { client, event } = capturingClient(Tier.Basic)
+    client.recordSessionStart()
+    await client.flush(500)
+    expect(event(EventSessionStarted)?.attributes).not.toHaveProperty(AttrInstallMethod)
   })
 
   it('records each command as a cli.command.<name> span', async () => {
@@ -138,7 +170,7 @@ describe('wire format', () => {
     expect(span.status?.code).toBe(SpanStatusCode.ERROR)
   })
 
-  it('emits classified errors at Tier.Full and raw ones only via optIn', async () => {
+  it('keeps raw error detail out of Tier.Full, which only classifies errors', async () => {
     const { client, event } = capturingClient(Tier.Full)
     client.recordError('testcli sub', ErrorCategory.Network)
     client.recordHelpFlagUsage('testcli sub')

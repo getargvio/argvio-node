@@ -20,9 +20,9 @@ export const Tier = {
    * code, duration, CLI version, OS/arch and CI environment only.
    */
   Anonymous: 0,
-  /** Adds an opaque per-process session ID, an opaque per-install ID, and flag names (never values). */
+  /** Adds an opaque per-process session ID, an opaque per-install ID, flag names (never values), and classified (not raw) error types. */
   Basic: 1,
-  /** Adds classified (not raw) error types. */
+  /** Reserved: the server allowlist permits some fields here, but this SDK sends nothing beyond `Tier.Basic`. */
   Full: 2,
   /**
    * The explicit opt-in tier: raw error detail (stack traces, messages)
