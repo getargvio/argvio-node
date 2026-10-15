@@ -11,8 +11,8 @@
     "start": "node cli.mjs"
   },
   "dependencies": {
-    "@getargvio/argvio": "^0.1.0",
-    "@getargvio/commander": "^0.1.0",
+    "@getargvio/argvio": "workspace:*",
+    "@getargvio/commander": "workspace:*",
     "commander": "^15"
   }
 }

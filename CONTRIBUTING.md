@@ -28,17 +28,17 @@ blast radius — please read this before opening a PR.
 ## Development
 
 ```sh
-npm install
-npm run build
-npm run lint
-npm run format:check
-npm run typecheck
-npm test
-npm run bench
+pnpm install
+pnpm run build
+pnpm run lint
+pnpm run format:check
+pnpm run typecheck
+pnpm test
+pnpm run bench
 ```
 
 Each package can also be worked on individually via
-`npm run <script> -w packages/<name>`.
+`pnpm --filter @getargvio/<name> run <script>`.
 
 ## Supported Node versions
 

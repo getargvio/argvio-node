@@ -24,32 +24,35 @@ jobs:
       - name: Checkout 🛎
         uses: actions/checkout@v7
 
+      - name: Setup pnpm 🏗
+        uses: pnpm/action-setup@v6
+
       - name: Setup node env 🏗
         uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies 👨🏻‍💻
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Lint
-        run: npm run lint
+        run: pnpm run lint
 
       - name: Format
-        run: npm run format:check
+        run: pnpm run format:check
 
       - name: Typecheck
-        run: npm run typecheck
+        run: pnpm run typecheck
 
       - name: Build
-        run: npm run build
+        run: pnpm run build
 
       - name: Test
-        run: npm test -- --coverage
+        run: pnpm test -- --coverage
 
       - name: Benchmark (smoke)
-        run: npm run -w packages/core bench -- --run
+        run: pnpm --filter @getargvio/argvio run bench -- --run
 
       - name: Upload coverage reports to Codecov
         if: matrix.node-version == '24'
@@ -83,17 +86,20 @@ jobs:
       - name: Checkout 🛎
         uses: actions/checkout@v7
 
+      - name: Setup pnpm 🏗
+        uses: pnpm/action-setup@v6
+
       - name: Setup node env 🏗
         uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
-          cache: npm
+          cache: pnpm
 
       - name: Install dependencies 👨🏻‍💻
-        run: npm ci
+        run: pnpm install --frozen-lockfile
 
       - name: Build core
-        run: npm run build -w packages/core
+        run: pnpm --filter @getargvio/argvio run build
 
       - name: Pin previous minor peer dependency
         if: matrix.version == 'previous-minor'
@@ -109,7 +115,7 @@ jobs:
             });
             console.log(match ?? '${current}');
           ")"
-          npm install --no-save "${{ matrix.peer }}@${previous_minor}"
+          pnpm add "${{ matrix.peer }}@${previous_minor}"
 
       - name: Test
-        run: npm test -w packages/${{ matrix.package }}
+        run: pnpm --filter @getargvio/${{ matrix.package }} run test

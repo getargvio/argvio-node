@@ -1,4 +1,5 @@
-import type { Attributes, Counter, Histogram } from '@opentelemetry/api'
+import { SpanStatusCode } from '@opentelemetry/api'
+import type { Attributes, Counter, Histogram, Tracer } from '@opentelemetry/api'
 import { SeverityNumber } from '@opentelemetry/api-logs'
 import type { Logger } from '@opentelemetry/api-logs'
 import { LoggerProvider, BatchLogRecordProcessor } from '@opentelemetry/sdk-logs'
@@ -14,22 +15,33 @@ import { Tier, tierAllows, tierToString, isValidTier, RESOURCE_ATTR_TIER } from 
 import type { ErrorCategory } from './tier.js'
 import { ErrorCategory as ErrorCategoryValues, isValidErrorCategory } from './tier.js'
 import {
-  AttrCommandFlags,
-  AttrCommandPath,
-  AttrErrorCategory,
+  AttrCommandName,
+  AttrDurationMs,
   AttrErrorMessage,
   AttrErrorStack,
+  AttrErrorType,
   AttrExitCode,
-  AttrHelpUsed,
+  AttrFlagNames,
+  AttrHelpFlag,
+  AttrInstallId,
   AttrSessionId,
+  EventCommandInvoked,
+  EventErrorRaised,
+  EventHelpViewed,
+  EventSessionStarted,
   MetricCommandDuration,
+  MetricCommandInvocations,
+  MetricErrors,
+  SpanCommandPrefix,
+  commandName,
+  loadOrCreateInstallId,
   newSessionId,
 } from './taxonomy.js'
 import type { Stats } from './safety.js'
 import { ARGVIO_DEBUG, DroppedCounters, safeRun } from './safety.js'
 
 /**
- * Identifies this SDK to the OTel SDKs it wraps (meter/logger name),
+ * Identifies this SDK to the OTel SDKs it wraps (tracer/meter/logger name),
  * distinct from the CLI's own resource attributes.
  */
 const INSTRUMENTATION_NAME = '@getargvio/argvio'
@@ -122,7 +134,24 @@ function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
 }
 
+/** One completed command, for {@link Client.recordCommand}. */
+export interface CommandResult {
+  /** The full command path, as for {@link Client.recordCommandInvocation}. */
+  path: string
+  /** Names (never values) of the flags the user set. Only sent at `Tier.Basic`+. */
+  flagNames?: readonly string[]
+  /** When the command began, in epoch milliseconds. Defaults to `durationMs` before now. */
+  startMs?: number
+  /** How long the command ran, in milliseconds. */
+  durationMs: number
+  /** The command's exit code; non-zero counts as an error. */
+  exitCode: number
+}
+
 interface ClientParams {
+  cliName?: string
+  installIdPath?: string | undefined
+  tracer?: Tracer
   disabled: boolean
   initError: Error | null
   tier: Tier
@@ -134,7 +163,6 @@ interface ClientParams {
   logger?: Logger
   latencyHist?: Histogram
   invocationsCounter?: Counter
-  sessionsCounter?: Counter
   errorEventsCounter?: Counter
 }
 
@@ -158,6 +186,10 @@ export class Client {
   private shuttingDown = false
   private shutdownStarted = false
   private sessionId: string | undefined
+  private sessionStarted = false
+  private readonly cliName: string
+  private readonly installIdPath: string | undefined
+  private readonly tracer: Tracer | undefined
 
   private readonly tracerProvider: NodeTracerProvider | undefined
   private readonly meterProvider: MeterProvider | undefined
@@ -165,7 +197,6 @@ export class Client {
   private readonly logger: Logger | undefined
   private readonly latencyHist: Histogram | undefined
   private readonly invocationsCounter: Counter | undefined
-  private readonly sessionsCounter: Counter | undefined
   private readonly errorEventsCounter: Counter | undefined
 
   /** @internal use {@link createClient} */
@@ -181,8 +212,10 @@ export class Client {
     this.logger = params.logger
     this.latencyHist = params.latencyHist
     this.invocationsCounter = params.invocationsCounter
-    this.sessionsCounter = params.sessionsCounter
     this.errorEventsCounter = params.errorEventsCounter
+    this.cliName = params.cliName ?? ''
+    this.installIdPath = params.installIdPath
+    this.tracer = params.tracer
   }
 
   private enabled(): boolean {
@@ -209,22 +242,30 @@ export class Client {
 
   private emitEvent(name: string, severity: SeverityNumber, attributes: Attributes = {}): void {
     this.queue.push(() => {
-      this.logger?.emit({
-        eventName: name,
-        timestamp: Date.now(),
-        severityNumber: severity,
-        attributes: { ...this.tierAttr(), ...attributes },
-      })
+      this.emitEventNow(name, severity, attributes)
     })
   }
 
+  private emitEventNow(name: string, severity: SeverityNumber, attributes: Attributes = {}): void {
+    this.logger?.emit({
+      eventName: name,
+      timestamp: Date.now(),
+      severityNumber: severity,
+      attributes: { ...this.tierAttr(), ...attributes },
+    })
+  }
+
+  private name(commandPath: string): string {
+    return commandName(this.cliName, commandPath)
+  }
+
   /**
-   * Lazily generates a session correlation ID at `Tier.Full`+. A random,
+   * Lazily generates a session correlation ID at `Tier.Basic`+. A random,
    * non-persistent identifier scoped to a single process invocation —
    * not a user or device identifier.
    */
   private ensureSessionId(): string {
-    if (!tierAllows(this.tier, Tier.Full)) return ''
+    if (!tierAllows(this.tier, Tier.Basic)) return ''
     if (this.sessionId === undefined) {
       this.sessionId = newSessionId()
     }
@@ -232,91 +273,88 @@ export class Client {
   }
 
   /**
-   * Records the start of a CLI process session. Call once, as early as
-   * possible. At `Tier.Anonymous` this only increments an aggregate
-   * session counter. At `Tier.Basic`+ it also emits a `cli.session_start`
-   * event. At `Tier.Full`+ the event carries a per-process session
-   * correlation ID.
+   * Records the start of a CLI process session, which is what the server
+   * counts sessions, active installs and retention from. Call it as early
+   * as possible (the yargs/commander integrations do it for you); only the
+   * first call per Client emits anything.
+   *
+   * At `Tier.Anonymous` the event carries no identifiers. At `Tier.Basic`+
+   * it also carries the per-process session ID and the install ID, a
+   * random UUID persisted in the CLI's config directory the first time it
+   * is needed — never derived from the user or machine.
    */
   recordSessionStart(): void {
     safeRun(() => {
-      if (!this.enabled()) return
+      if (!this.enabled() || this.sessionStarted) return
+      this.sessionStarted = true
+      const sessionId = this.ensureSessionId()
+      const basic = tierAllows(this.tier, Tier.Basic)
       this.queue.push(() => {
-        this.sessionsCounter?.add(1, this.tierAttr())
+        const attrs: Attributes = {}
+        if (sessionId) attrs[AttrSessionId] = sessionId
+        if (basic) {
+          const installId = loadOrCreateInstallId(this.installIdPath)
+          if (installId) attrs[AttrInstallId] = installId
+        }
+        this.emitEventNow(EventSessionStarted, SeverityNumber.INFO, attrs)
       })
-      if (!tierAllows(this.tier, Tier.Basic)) return
-      const attrs: Attributes = {}
-      const id = this.ensureSessionId()
-      if (id) attrs[AttrSessionId] = id
-      this.emitEvent('cli.session_start', SeverityNumber.INFO, attrs)
-    }, this.counters)
-  }
-
-  /** Records the end of a CLI process session. Call once, symmetric with {@link recordSessionStart}. */
-  recordSessionEnd(): void {
-    safeRun(() => {
-      if (!this.enabled() || !tierAllows(this.tier, Tier.Basic)) return
-      const attrs: Attributes = {}
-      const id = this.ensureSessionId()
-      if (id) attrs[AttrSessionId] = id
-      this.emitEvent('cli.session_end', SeverityNumber.INFO, attrs)
     }, this.counters)
   }
 
   /**
    * Records that a command began executing. `commandPath` should be the
-   * full command path (e.g. `"mycli sub subsub"`), not just the leaf
-   * command name. `flagNames` is the list of flag *names* the user set —
-   * never flag values, which this SDK never accepts anywhere in the
-   * taxonomy.
+   * full command path (e.g. `"mycli sub subsub"`); it is reported as the
+   * dotted command name (`"sub.subsub"`). `flagNames` is the list of flag
+   * *names* the user set — never flag values, which this SDK never
+   * accepts anywhere in the taxonomy.
    *
-   * At `Tier.Anonymous` this only increments an aggregate invocation
-   * counter with no path/flag detail. At `Tier.Basic`+ the full command
-   * path and flag names are included.
+   * The command name is recorded at every tier; flag names and the
+   * session ID at `Tier.Basic`+.
    */
   recordCommandInvocation(commandPath: string, flagNames: readonly string[] = []): void {
     safeRun(() => {
       if (!this.enabled()) return
-      this.queue.push(() => {
-        this.invocationsCounter?.add(1, this.tierAttr())
-      })
-      if (!tierAllows(this.tier, Tier.Basic)) return
-      const attrs: Attributes = { [AttrCommandPath]: commandPath }
-      if (flagNames.length > 0) attrs[AttrCommandFlags] = [...flagNames]
-      this.emitEvent('cli.command_invocation', SeverityNumber.INFO, attrs)
+      const attrs: Attributes = { [AttrCommandName]: this.name(commandPath) }
+      if (tierAllows(this.tier, Tier.Basic)) {
+        if (flagNames.length > 0) attrs[AttrFlagNames] = [...flagNames]
+        const id = this.ensureSessionId()
+        if (id) attrs[AttrSessionId] = id
+      }
+      this.emitEvent(EventCommandInvoked, SeverityNumber.INFO, attrs)
     }, this.counters)
   }
 
   /**
-   * Records the exit code a command finished with. Pass `""` for
-   * `commandPath` if unknown (e.g. a single-command CLI). At
-   * `Tier.Anonymous` the exit code is recorded without a command path.
-   * At `Tier.Basic`+ the command path is included.
+   * Records a completed command: a `cli.command.<name>` span covering its
+   * execution, plus the `cli.command.invocations` and
+   * `cli.command.duration` metrics. This is what the server's command
+   * frequency, latency, error-rate and exit-code dashboards are built
+   * from, so call it once for every command that ran (the integrations
+   * do). Available at every tier; flag names only at `Tier.Basic`+.
    */
-  recordExitCode(commandPath: string, code: number): void {
+  recordCommand(result: CommandResult): void {
     safeRun(() => {
-      if (!this.gate(Tier.Anonymous)) return
-      const attrs: Attributes = { [AttrExitCode]: code }
-      if (tierAllows(this.tier, Tier.Basic) && commandPath) {
-        attrs[AttrCommandPath] = commandPath
+      if (!this.enabled()) return
+      const durationMs = Math.max(0, result.durationMs)
+      const startMs = result.startMs ?? Date.now() - durationMs
+      const name = this.name(result.path)
+      const attrs: Attributes = {
+        ...this.tierAttr(),
+        [AttrCommandName]: name,
+        [AttrExitCode]: result.exitCode,
       }
-      const severity = code !== 0 ? SeverityNumber.WARN : SeverityNumber.INFO
-      this.emitEvent('cli.exit_code', severity, attrs)
-    }, this.counters)
-  }
-
-  /**
-   * Records how long a command took to execute, in milliseconds, on a
-   * histogram (`cli.command.duration`). Available at every tier.
-   */
-  recordLatency(commandPath: string, durationMs: number): void {
-    safeRun(() => {
-      if (!this.gate(Tier.Anonymous)) return
-      const attrs: Attributes = { ...this.tierAttr() }
-      if (tierAllows(this.tier, Tier.Basic) && commandPath) {
-        attrs[AttrCommandPath] = commandPath
+      const spanAttrs: Attributes = { ...attrs, [AttrDurationMs]: Math.round(durationMs) }
+      if (tierAllows(this.tier, Tier.Basic) && result.flagNames && result.flagNames.length > 0) {
+        spanAttrs[AttrFlagNames] = [...result.flagNames]
       }
       this.queue.push(() => {
+        const span = this.tracer?.startSpan(SpanCommandPrefix + name, {
+          startTime: startMs,
+          attributes: spanAttrs,
+        })
+        if (result.exitCode !== 0) span?.setStatus({ code: SpanStatusCode.ERROR })
+        span?.end(startMs + durationMs)
+        this.invocationsCounter?.add(1, attrs)
         this.latencyHist?.record(durationMs, attrs)
       })
     }, this.counters)
@@ -326,11 +364,10 @@ export class Client {
   recordHelpFlagUsage(commandPath: string): void {
     safeRun(() => {
       if (!this.gate(Tier.Anonymous)) return
-      const attrs: Attributes = { [AttrHelpUsed]: true }
-      if (tierAllows(this.tier, Tier.Basic) && commandPath) {
-        attrs[AttrCommandPath] = commandPath
-      }
-      this.emitEvent('cli.help_flag_used', SeverityNumber.INFO, attrs)
+      this.emitEvent(EventHelpViewed, SeverityNumber.INFO, {
+        [AttrCommandName]: this.name(commandPath),
+        [AttrHelpFlag]: 'help',
+      })
     }, this.counters)
   }
 
@@ -340,19 +377,21 @@ export class Client {
    * deliberately the only error-recording capability available below
    * `Tier.OptIn`. Raw error detail is only reachable via {@link optIn}.
    *
-   * Requires `Tier.Full`+; at lower tiers this is a no-op (counted in
-   * `stats().belowTierDropped`).
+   * At every tier this counts the error on the `cli.errors` metric by
+   * command. At `Tier.Full`+ the category is attached as the error type
+   * and a `cli.error.raised` event is emitted too.
    */
   recordError(commandPath: string, category: ErrorCategory = ErrorCategoryValues.Unknown): void {
     safeRun(() => {
-      if (!this.gate(Tier.Full)) return
+      if (!this.enabled()) return
       const cat = isValidErrorCategory(category) ? category : ErrorCategoryValues.Unknown
-      const attrs: Attributes = { [AttrErrorCategory]: cat }
-      if (commandPath) attrs[AttrCommandPath] = commandPath
+      const full = tierAllows(this.tier, Tier.Full)
+      const attrs: Attributes = { [AttrCommandName]: this.name(commandPath) }
+      if (full) attrs[AttrErrorType] = cat
       this.queue.push(() => {
-        this.errorEventsCounter?.add(1, { ...this.tierAttr(), [AttrErrorCategory]: cat })
+        this.errorEventsCounter?.add(1, { ...this.tierAttr(), ...attrs })
       })
-      this.emitEvent('cli.error', SeverityNumber.ERROR, attrs)
+      if (full) this.emitEvent(EventErrorRaised, SeverityNumber.ERROR, attrs)
     }, this.counters)
   }
 
@@ -372,10 +411,12 @@ export class Client {
   _recordErrorDetail(commandPath: string, err: Error, stack?: string): void {
     safeRun(() => {
       if (!this.gate(Tier.OptIn)) return
-      const attrs: Attributes = { [AttrErrorMessage]: err.message }
-      if (commandPath) attrs[AttrCommandPath] = commandPath
+      const attrs: Attributes = {
+        [AttrCommandName]: this.name(commandPath),
+        [AttrErrorMessage]: err.message,
+      }
       if (stack) attrs[AttrErrorStack] = stack
-      this.emitEvent('cli.error_detail', SeverityNumber.ERROR, attrs)
+      this.emitEvent(EventErrorRaised, SeverityNumber.ERROR, attrs)
     }, this.counters)
   }
 
@@ -388,14 +429,13 @@ export class Client {
   async flush(timeoutMs: number = this.shutdownTimeoutMs): Promise<void> {
     if (!this.enabled()) return
     await this.queue.waitForDrain(timeoutMs)
+    // allSettled: an unreachable collector must never make this reject.
     await withTimeout(
-      Promise.all(
-        [
-          this.tracerProvider?.forceFlush(),
-          this.meterProvider?.forceFlush(),
-          this.loggerProvider?.forceFlush(),
-        ].filter((p): p is Promise<void> => Boolean(p)),
-      ).then(() => undefined),
+      Promise.allSettled([
+        this.tracerProvider?.forceFlush(),
+        this.meterProvider?.forceFlush(),
+        this.loggerProvider?.forceFlush(),
+      ]).then(() => undefined),
       timeoutMs,
     )
   }
@@ -412,14 +452,13 @@ export class Client {
     this.shuttingDown = true
 
     await this.queue.waitForDrain(timeoutMs)
+    // allSettled: an unreachable collector must never make this reject.
     await withTimeout(
-      Promise.all(
-        [
-          this.tracerProvider?.shutdown(),
-          this.meterProvider?.shutdown(),
-          this.loggerProvider?.shutdown(),
-        ].filter((p): p is Promise<void> => Boolean(p)),
-      ).then(() => undefined),
+      Promise.allSettled([
+        this.tracerProvider?.shutdown(),
+        this.meterProvider?.shutdown(),
+        this.loggerProvider?.shutdown(),
+      ]).then(() => undefined),
       timeoutMs,
     )
   }
@@ -531,6 +570,9 @@ export function createClient(
     const logger = loggerProvider.getLogger(INSTRUMENTATION_NAME)
 
     return new Client({
+      cliName,
+      installIdPath: cfg.installIdPath,
+      tracer: tracerProvider.getTracer(INSTRUMENTATION_NAME),
       disabled: false,
       initError: null,
       tier,
@@ -544,13 +586,12 @@ export function createClient(
         unit: 'ms',
         description: 'Duration of a CLI command invocation.',
       }),
-      invocationsCounter: meter.createCounter('cli.invocations', {
-        description: 'Count of CLI command invocations.',
+      invocationsCounter: meter.createCounter(MetricCommandInvocations, {
+        unit: '1',
+        description: 'Count of completed CLI command invocations.',
       }),
-      sessionsCounter: meter.createCounter('cli.sessions', {
-        description: 'Count of CLI process sessions.',
-      }),
-      errorEventsCounter: meter.createCounter('cli.errors', {
+      errorEventsCounter: meter.createCounter(MetricErrors, {
+        unit: '1',
         description: 'Count of recorded CLI errors.',
       }),
     })

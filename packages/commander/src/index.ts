@@ -56,7 +56,8 @@ function isControlFlowExit(err: unknown): err is CommanderError {
  *   for every resolved action command (verified against commander's own
  *   source: unlike `postAction`, `preAction` runs unconditionally before
  *   the action handler).
- * - Exit code and latency are captured by wrapping `program.parseAsync`
+ * - The session start, and each completed command's exit code and
+ *   latency (`Client.recordCommand`), are captured by wrapping `program.parseAsync`
  *   — `postAction` does **not** run when an action handler throws or its
  *   returned promise rejects, so this package does not rely on it at
  *   all, measuring whole-invocation latency instead.
@@ -84,11 +85,13 @@ export function instrumentCommander(
   program.exitOverride()
 
   let lastCommandPath = program.name()
+  let lastFlagNames: string[] = []
 
   if (captureInvocation) {
     program.hook('preAction', (_thisCommand, actionCommand) => {
       lastCommandPath = commandPath(actionCommand)
-      client.recordCommandInvocation(lastCommandPath, changedOptionNames(actionCommand))
+      lastFlagNames = changedOptionNames(actionCommand)
+      client.recordCommandInvocation(lastCommandPath, lastFlagNames)
     })
   }
 
@@ -103,17 +106,24 @@ export function instrumentCommander(
   const originalParseAsync = program.parseAsync.bind(program)
   program.parseAsync = (async (...args: Parameters<Command['parseAsync']>) => {
     const start = Date.now()
+    client.recordSessionStart()
+    const recordCommand = (exitCode: number): void => {
+      client.recordCommand({
+        path: lastCommandPath,
+        flagNames: lastFlagNames,
+        startMs: start,
+        durationMs: Date.now() - start,
+        exitCode,
+      })
+    }
     try {
       const result = await originalParseAsync(...args)
-      client.recordExitCode(lastCommandPath, 0)
-      client.recordLatency(lastCommandPath, Date.now() - start)
+      recordCommand(0)
       return result
     } catch (err) {
-      client.recordLatency(lastCommandPath, Date.now() - start)
-      if (isControlFlowExit(err)) {
-        client.recordExitCode(lastCommandPath, 0)
-      } else {
-        client.recordExitCode(lastCommandPath, 1)
+      // --help/--version aren't command runs, same as in the cobra integration.
+      if (!isControlFlowExit(err)) {
+        recordCommand(1)
         const error = err instanceof Error ? err : new Error(String(err))
         client.recordError(lastCommandPath, classify(error))
       }

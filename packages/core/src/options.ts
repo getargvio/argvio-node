@@ -1,5 +1,6 @@
 import { Tier } from './tier.js'
 import type { ConsentProvider } from './consent.js'
+import { defaultInstallIdPath } from './consentFile.js'
 
 export type Transport = 'http' | 'grpc'
 
@@ -67,6 +68,12 @@ export interface ClientOptions {
    * build itself rather than any individual invocation.
    */
   resourceAttributes?: Record<string, string>
+  /**
+   * Where the install ID (`cli.install_id`, `Tier.Basic`+) is persisted.
+   * Defaults to `argvio-install-id` in the same per-CLI config directory
+   * as `FileConsentProvider`'s consent file. `''` turns install IDs off.
+   */
+  installIdPath?: string
 }
 
 export interface ResolvedConfig {
@@ -84,6 +91,7 @@ export interface ResolvedConfig {
   shutdownTimeoutMs: number
   queueSize: number
   resourceAttributes: Record<string, string>
+  installIdPath: string | undefined
 }
 
 export function resolveConfig(
@@ -115,5 +123,9 @@ export function resolveConfig(
         : DEFAULT_SHUTDOWN_TIMEOUT_MS,
     queueSize: options.queueSize && options.queueSize > 0 ? options.queueSize : DEFAULT_QUEUE_SIZE,
     resourceAttributes: options.resourceAttributes ?? {},
+    installIdPath:
+      options.installIdPath !== undefined
+        ? options.installIdPath || undefined
+        : defaultInstallIdPath(cliName),
   }
 }

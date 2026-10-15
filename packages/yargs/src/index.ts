@@ -71,7 +71,8 @@ type ParseFn = Argv['parseAsync']
  * - Command path + flag names (see `Client.recordCommandInvocation`) are
  *   captured via global `middleware(fn, true)` — applied before
  *   validation, so it still runs even if validation later fails.
- * - Exit code, latency, and errors are captured by wrapping
+ * - The session start, and each completed command (`Client.recordCommand`:
+ *   exit code, latency) and its errors, are captured by wrapping
  *   `parseAsync`/`parse` — the one place guaranteed to run exactly once
  *   per invocation, regardless of success or failure.
  * - Help usage is captured on a **best-effort** basis: yargs handles
@@ -137,9 +138,22 @@ export function instrumentYargs(
     return function wrapped(this: Argv, ...args: Parameters<ParseFn>) {
       const maybeArgs = args[0]
       rawArgs = Array.isArray(maybeArgs) ? maybeArgs.map(String) : process.argv.slice(2)
+      client.recordSessionStart()
 
-      if (captureHelp && helpFlags.some((flag) => rawArgs.includes(flag))) {
+      const helpRequested = helpFlags.some((flag) => rawArgs.includes(flag))
+      if (captureHelp && helpRequested) {
         client.recordHelpFlagUsage(guessCommandPathFromRawArgs(rawArgs))
+      }
+      // Help output isn't a command run, same as in the cobra integration.
+      const recordCommand = (exitCode: number): void => {
+        if (helpRequested) return
+        client.recordCommand({
+          path: lastCommandPath,
+          flagNames: extractFlagNames(rawArgs),
+          startMs: start,
+          durationMs: Date.now() - start,
+          exitCode,
+        })
       }
 
       const start = Date.now()
@@ -156,13 +170,11 @@ export function instrumentYargs(
       }
       return resultPromise
         .then((result: unknown) => {
-          client.recordExitCode(lastCommandPath, 0)
-          client.recordLatency(lastCommandPath, Date.now() - start)
+          recordCommand(0)
           return result
         })
         .catch((err: unknown) => {
-          client.recordExitCode(lastCommandPath, 1)
-          client.recordLatency(lastCommandPath, Date.now() - start)
+          recordCommand(1)
           client.recordError(
             lastCommandPath,
             classify(err instanceof Error ? err : new Error(String(err))),

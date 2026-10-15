@@ -52,7 +52,7 @@
     "yargs": ">=17.0.0"
   },
   "dependencies": {
-    "@getargvio/argvio": "^0.1.0"
+    "@getargvio/argvio": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24",

@@ -1,4 +1,5 @@
 export { Client, OptInScope, createClient } from './client.js'
+export type { CommandResult } from './client.js'
 
 export type { ClientOptions, Transport } from './options.js'
 export {
@@ -25,7 +26,7 @@ export {
 export type { ConsentProvider } from './consent.js'
 export { StaticProvider, DisabledProvider, chainProviders } from './consent.js'
 
-export { isCI, isDoNotTrackRequested, EnvConsentProvider } from './consentEnv.js'
+export { isCI, isDoNotTrackRequested, detectCIProvider, EnvConsentProvider } from './consentEnv.js'
 
 export type { FileConsentProviderOptions } from './consentFile.js'
 export { FileConsentProvider } from './consentFile.js'
@@ -33,13 +34,29 @@ export { FileConsentProvider } from './consentFile.js'
 export type { Stats } from './safety.js'
 
 export {
-  AttrCommandPath,
-  AttrCommandFlags,
+  AttrCommandName,
   AttrExitCode,
-  AttrHelpUsed,
+  AttrDurationMs,
+  AttrFlagNames,
   AttrSessionId,
-  AttrErrorCategory,
+  AttrInstallId,
+  AttrHelpFlag,
+  AttrErrorType,
   AttrErrorMessage,
   AttrErrorStack,
+  EventSessionStarted,
+  EventCommandInvoked,
+  EventHelpViewed,
+  EventErrorRaised,
+  SpanCommandPrefix,
+  MetricCommandInvocations,
   MetricCommandDuration,
+  MetricErrors,
 } from './taxonomy.js'
+export {
+  ResourceAttrCLIVersion,
+  ResourceAttrOS,
+  ResourceAttrArch,
+  ResourceAttrIsCI,
+  ResourceAttrCIProvider,
+} from './resource.js'

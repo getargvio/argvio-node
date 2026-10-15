@@ -32,6 +32,28 @@ export function isCI(): boolean {
   })
 }
 
+/** CI providers reported on the `cli.ci_provider` resource attribute. */
+const CI_PROVIDERS: ReadonlyArray<readonly [envVar: string, provider: string]> = [
+  ['GITHUB_ACTIONS', 'github_actions'],
+  ['GITLAB_CI', 'gitlab_ci'],
+  ['CIRCLECI', 'circleci'],
+  ['BUILDKITE', 'buildkite'],
+  ['JENKINS_URL', 'jenkins'],
+  ['TRAVIS', 'travis'],
+]
+
+/**
+ * Returns which CI provider the process runs in, `'unknown'` for an
+ * unrecognized CI system, or `undefined` outside CI.
+ */
+export function detectCIProvider(): string | undefined {
+  for (const [envVar, provider] of CI_PROVIDERS) {
+    const value = process.env[envVar]
+    if (value && value !== 'false' && value !== '0') return provider
+  }
+  return isCI() ? 'unknown' : undefined
+}
+
 /**
  * Reports whether the `DO_NOT_TRACK` environment variable
  * (https://do-not-track.dev) requests telemetry be disabled. Any value
