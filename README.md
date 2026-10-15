@@ -73,13 +73,13 @@ the full model.
 ## Development
 
 ```sh
-npm install
-npm run build
-npm run lint
-npm run format:check
-npm run typecheck
-npm test
-npm run bench
+pnpm install
+pnpm run build
+pnpm run lint
+pnpm run format:check
+pnpm run typecheck
+pnpm test
+pnpm run bench
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for ground rules before opening a

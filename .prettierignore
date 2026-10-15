@@ -4,3 +4,4 @@ coverage/
 CHANGELOG.md
 .claude/
 .serena/
+pnpm-lock.yaml

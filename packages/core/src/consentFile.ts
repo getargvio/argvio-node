@@ -23,6 +23,12 @@ function userConfigDir(): string | undefined {
   }
 }
 
+/** The default path of the install ID file: next to the consent file. */
+export function defaultInstallIdPath(cliName: string): string | undefined {
+  const consentPath = defaultConsentPath(cliName)
+  return consentPath ? join(dirname(consentPath), 'argvio-install-id') : undefined
+}
+
 function defaultConsentPath(cliName: string): string | undefined {
   const dir = userConfigDir()
   if (!dir) return undefined

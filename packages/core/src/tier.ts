@@ -9,17 +9,20 @@
  * allowed at the tier below it. Compare with plain `<`/`<=`/`>=` — the
  * numeric values are significant, not just distinct enum tags.
  *
- * TODO(schema): the wire string values in {@link tierToString} are
- * provisional pending the server-side allowlist file being confirmed.
- * They MUST match the `public` server's semantic allowlist exactly, or
- * the server will reject/strip the resource attribute.
+ * The wire string values in {@link tierToString} MUST match the
+ * consent_tiers names in the `public` server's allowlist
+ * (schema/allowlist/v1.yaml in getargvio/argvio) exactly, or the server
+ * rejects the record.
  */
 export const Tier = {
-  /** No persistent or cross-invocation identifiers; aggregate counts only. */
+  /**
+   * No persistent or cross-invocation identifiers: command name, exit
+   * code, duration, CLI version, OS/arch and CI environment only.
+   */
   Anonymous: 0,
-  /** Adds command path, flag names (not values), exit code, and latency. */
+  /** Adds an opaque per-process session ID, an opaque per-install ID, and flag names (never values). */
   Basic: 1,
-  /** Adds session correlation and classified (not raw) error signatures. */
+  /** Adds classified (not raw) error types. */
   Full: 2,
   /**
    * The explicit opt-in tier: raw error detail (stack traces, messages)
@@ -38,7 +41,7 @@ const TIER_STRINGS: Record<Tier, string> = {
   [Tier.Anonymous]: 'anonymous',
   [Tier.Basic]: 'basic',
   [Tier.Full]: 'full',
-  [Tier.OptIn]: 'opt-in',
+  [Tier.OptIn]: 'optin_plus',
 }
 
 /** Returns the wire value sent on the `cli.analytics.tier` resource attribute. */
@@ -60,7 +63,8 @@ export function parseTier(value: string): Tier | undefined {
       return Tier.Basic
     case 'full':
       return Tier.Full
-    case 'opt-in':
+    case 'optin_plus':
+    case 'opt-in': // older SDKs' wire value, still accepted from consent files
       return Tier.OptIn
     default:
       return undefined

@@ -38,24 +38,28 @@ function buildProgram() {
 }
 
 describe('instrumentCommander', () => {
-  it('records a successful invocation with option names, exit code 0, and latency', async () => {
+  it('records a successful invocation with option names, and the completed command', async () => {
     const client = makeClient()
     const recordInvocation = vi.spyOn(client, 'recordCommandInvocation')
-    const recordExit = vi.spyOn(client, 'recordExitCode')
-    const recordLatency = vi.spyOn(client, 'recordLatency')
+    const recordCommand = vi.spyOn(client, 'recordCommand')
 
     const program = instrumentCommander(buildProgram(), client)
     await program.parseAsync(['node', 'testcli', 'greet', '--loud'])
 
     expect(recordInvocation).toHaveBeenCalledWith('testcli greet', ['loud'])
-    expect(recordExit).toHaveBeenCalledWith('testcli greet', 0)
-    expect(recordLatency).toHaveBeenCalledWith('testcli greet', expect.any(Number))
+    expect(recordCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: 'testcli greet',
+        exitCode: 0,
+        durationMs: expect.any(Number),
+      }),
+    )
   })
 
   it('records a synchronously-thrown action error and rethrows it', async () => {
     const client = makeClient()
     const recordError = vi.spyOn(client, 'recordError')
-    const recordExit = vi.spyOn(client, 'recordExitCode')
+    const recordCommand = vi.spyOn(client, 'recordCommand')
 
     const program = instrumentCommander(buildProgram(), client, {
       classify: () => ErrorCategory.Internal,
@@ -63,13 +67,19 @@ describe('instrumentCommander', () => {
 
     await expect(program.parseAsync(['node', 'testcli', 'boom'])).rejects.toThrow('kaboom')
     expect(recordError).toHaveBeenCalledWith('testcli boom', ErrorCategory.Internal)
-    expect(recordExit).toHaveBeenCalledWith('testcli boom', 1)
+    expect(recordCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: 'testcli boom',
+        exitCode: 1,
+        durationMs: expect.any(Number),
+      }),
+    )
   })
 
   it('records an asynchronously-rejected action error and rethrows it', async () => {
     const client = makeClient()
     const recordError = vi.spyOn(client, 'recordError')
-    const recordExit = vi.spyOn(client, 'recordExitCode')
+    const recordCommand = vi.spyOn(client, 'recordCommand')
 
     const program = instrumentCommander(buildProgram(), client, {
       classify: () => ErrorCategory.Network,
@@ -79,13 +89,19 @@ describe('instrumentCommander', () => {
       'kaboom-async',
     )
     expect(recordError).toHaveBeenCalledWith('testcli boom-async', ErrorCategory.Network)
-    expect(recordExit).toHaveBeenCalledWith('testcli boom-async', 1)
+    expect(recordCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: 'testcli boom-async',
+        exitCode: 1,
+        durationMs: expect.any(Number),
+      }),
+    )
   })
 
   it('treats --help as a control-flow exit, not an error, and records help usage', async () => {
     const client = makeClient()
     const recordError = vi.spyOn(client, 'recordError')
-    const recordExit = vi.spyOn(client, 'recordExitCode')
+    const recordCommand = vi.spyOn(client, 'recordCommand')
     const recordHelp = vi.spyOn(client, 'recordHelpFlagUsage')
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
 
@@ -94,7 +110,7 @@ describe('instrumentCommander', () => {
 
     expect(recordHelp).toHaveBeenCalled()
     expect(recordError).not.toHaveBeenCalled()
-    expect(recordExit).toHaveBeenCalledWith('testcli', 0)
+    expect(recordCommand).not.toHaveBeenCalled()
 
     vi.restoreAllMocks()
   })
@@ -102,14 +118,14 @@ describe('instrumentCommander', () => {
   it('treats --version as a control-flow exit, not an error', async () => {
     const client = makeClient()
     const recordError = vi.spyOn(client, 'recordError')
-    const recordExit = vi.spyOn(client, 'recordExitCode')
+    const recordCommand = vi.spyOn(client, 'recordCommand')
     vi.spyOn(process.stdout, 'write').mockImplementation(() => true)
 
     const program = instrumentCommander(buildProgram().version('1.0.0'), client)
     await expect(program.parseAsync(['node', 'testcli', '--version'])).rejects.toThrow()
 
     expect(recordError).not.toHaveBeenCalled()
-    expect(recordExit).toHaveBeenCalledWith('testcli', 0)
+    expect(recordCommand).not.toHaveBeenCalled()
 
     vi.restoreAllMocks()
   })

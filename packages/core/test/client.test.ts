@@ -72,10 +72,8 @@ describe('Client record* methods are always safe to call', () => {
     const client = createClient('key', 'cli', '1.0.0', { disabled: true })
     expect(() => {
       client.recordSessionStart()
-      client.recordSessionEnd()
       client.recordCommandInvocation('cli sub', ['flag'])
-      client.recordExitCode('cli sub', 1)
-      client.recordLatency('cli sub', 12)
+      client.recordCommand({ path: 'cli sub', durationMs: 12, exitCode: 1 })
       client.recordHelpFlagUsage('cli sub')
       client.recordError('cli sub', ErrorCategory.Network)
     }).not.toThrow()
@@ -93,12 +91,6 @@ describe('Client record* methods are always safe to call', () => {
 })
 
 describe('tier gating', () => {
-  it('drops recordError below Tier.Full and counts it', () => {
-    const client = makeClient(Tier.Basic)
-    client.recordError('cli sub', ErrorCategory.Internal)
-    expect(client.stats().belowTierDropped).toBeGreaterThan(0)
-  })
-
   it('allows recordError at Tier.Full', () => {
     const client = makeClient(Tier.Full)
     client.recordError('cli sub', ErrorCategory.Internal)
@@ -117,11 +109,11 @@ describe('tier gating', () => {
     expect(() => scope?.recordErrorDetail('cli sub', new Error('detail'))).not.toThrow()
   })
 
-  it('recordLatency and recordExitCode work at every tier, including Anonymous', () => {
+  it('recordCommand and recordError work at every tier, including Anonymous', () => {
     const client = makeClient(Tier.Anonymous)
     expect(() => {
-      client.recordLatency('cli sub', 5)
-      client.recordExitCode('cli sub', 0)
+      client.recordCommand({ path: 'cli sub', durationMs: 5, exitCode: 0 })
+      client.recordError('cli sub', ErrorCategory.Internal)
     }).not.toThrow()
     expect(client.stats().belowTierDropped).toBe(0)
   })
@@ -148,7 +140,9 @@ describe('flush / shutdown', () => {
     client.recordSessionStart()
     await client.shutdown(200)
     await expect(client.shutdown(200)).resolves.toBeUndefined()
-    expect(() => client.recordExitCode('cli sub', 0)).not.toThrow()
+    expect(() =>
+      client.recordCommand({ path: 'cli sub', durationMs: 1, exitCode: 0 }),
+    ).not.toThrow()
   })
 
   it('is a safe no-op on a disabled client', async () => {

@@ -10,7 +10,8 @@ export default [
       '**/examples/',
       // Root-level tooling config: simple enough not to need type-aware
       // linting, and including it would require its own tsconfig project.
-      'vitest.workspace.ts',
+      'vitest.config.ts',
+      'vitest.setup.ts',
     ],
   },
   {

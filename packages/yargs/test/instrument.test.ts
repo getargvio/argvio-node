@@ -45,24 +45,28 @@ function buildY() {
 }
 
 describe('instrumentYargs', () => {
-  it('records a successful invocation with flags, exit code 0, and latency', async () => {
+  it('records a successful invocation with flags, and the completed command', async () => {
     const client = makeClient()
     const recordInvocation = vi.spyOn(client, 'recordCommandInvocation')
-    const recordExit = vi.spyOn(client, 'recordExitCode')
-    const recordLatency = vi.spyOn(client, 'recordLatency')
+    const recordCommand = vi.spyOn(client, 'recordCommand')
 
     const y = instrumentYargs(buildY(), client)
     await y.parseAsync(['greet', 'world', '--loud'])
 
     expect(recordInvocation).toHaveBeenCalledWith('testcli greet', ['loud'])
-    expect(recordExit).toHaveBeenCalledWith('testcli greet', 0)
-    expect(recordLatency).toHaveBeenCalledWith('testcli greet', expect.any(Number))
+    expect(recordCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: 'testcli greet',
+        exitCode: 0,
+        durationMs: expect.any(Number),
+      }),
+    )
   })
 
   it('records a synchronously-thrown handler error and rethrows it', async () => {
     const client = makeClient()
     const recordError = vi.spyOn(client, 'recordError')
-    const recordExit = vi.spyOn(client, 'recordExitCode')
+    const recordCommand = vi.spyOn(client, 'recordCommand')
 
     const y = instrumentYargs(buildY(), client, {
       classify: () => ErrorCategory.Internal,
@@ -70,13 +74,19 @@ describe('instrumentYargs', () => {
 
     await expect(y.parseAsync(['boom'])).rejects.toThrow('kaboom')
     expect(recordError).toHaveBeenCalledWith('testcli boom', ErrorCategory.Internal)
-    expect(recordExit).toHaveBeenCalledWith('testcli boom', 1)
+    expect(recordCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: 'testcli boom',
+        exitCode: 1,
+        durationMs: expect.any(Number),
+      }),
+    )
   })
 
   it('records an asynchronously-rejected handler error and rethrows it', async () => {
     const client = makeClient()
     const recordError = vi.spyOn(client, 'recordError')
-    const recordExit = vi.spyOn(client, 'recordExitCode')
+    const recordCommand = vi.spyOn(client, 'recordCommand')
 
     const y = instrumentYargs(buildY(), client, {
       classify: () => ErrorCategory.Network,
@@ -84,7 +94,13 @@ describe('instrumentYargs', () => {
 
     await expect(y.parseAsync(['boom-async'])).rejects.toThrow('kaboom-async')
     expect(recordError).toHaveBeenCalledWith('testcli boom-async', ErrorCategory.Network)
-    expect(recordExit).toHaveBeenCalledWith('testcli boom-async', 1)
+    expect(recordCommand).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: 'testcli boom-async',
+        exitCode: 1,
+        durationMs: expect.any(Number),
+      }),
+    )
   })
 
   it('only records the invocation once even if middleware runs multiple times', async () => {
