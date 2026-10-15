@@ -34,14 +34,14 @@ names. Every taxonomy method still emits _something_ at this tier — an
 aggregate counter increment — so vendors get install/usage volume
 numbers even from users who've never made a choice.
 
-| Method                                  | What's emitted at Anonymous                                  |
-| --------------------------------------- | ------------------------------------------------------------ |
-| `recordSessionStart`/`recordSessionEnd` | `cli.sessions` counter increment only                        |
-| `recordCommandInvocation`               | `cli.invocations` counter increment only                     |
-| `recordExitCode`                        | exit code, no command path                                   |
-| `recordLatency`                         | duration, no command path                                    |
-| `recordHelpFlagUsage`                   | a bare "help was used" event, no command path                |
-| `recordError`                           | **nothing** — dropped, counted in `stats().belowTierDropped` |
+| Method                                  | What's emitted at Anonymous                                      |
+| --------------------------------------- | ---------------------------------------------------------------- |
+| `recordSessionStart`/`recordSessionEnd` | `cli.sessions` counter increment only                            |
+| `recordCommandInvocation`               | `cli.invocations` counter increment only                         |
+| `recordExitCode`                        | exit code, no command path                                       |
+| `recordLatency`                         | duration, no command path                                        |
+| `recordHelpFlagUsage`                   | a bare "help was used" event, no command path                    |
+| `recordError`                           | `cli.errors` counter increment by command; no category, no event |
 
 ### Tier.Basic
 
@@ -50,17 +50,22 @@ values — see below) to `recordCommandInvocation`, and adds the command
 path attribute to `recordExitCode`, `recordLatency`, and
 `recordHelpFlagUsage`.
 
+Also adds:
+
+- A per-process session correlation ID (`AttrSessionId`) — a random value
+  generated once per `Client`, not a user or device identifier, and not
+  persisted anywhere — and a per-install ID (`AttrInstallId`), a random
+  UUID persisted in the CLI's config directory. Both are attached to the
+  session start, command invoked, command completed and error events, so
+  the server can follow one install across invocations.
+- `recordError` starts emitting a `cli.error.raised` event: category
+  (`ErrorCategory`, e.g. `ErrorCategory.Network`) plus command path. Never
+  a message or stack trace — see Tier.OptIn.
+
 ### Tier.Full
 
-Adds:
-
-- A per-process session correlation ID (`AttrSessionId`) on
-  `recordSessionStart`/`recordSessionEnd` — a random value generated
-  once per `Client`, not a user or device identifier, and not persisted
-  anywhere.
-- `recordError` starts actually emitting: category (`ErrorCategory`,
-  e.g. `ErrorCategory.Network`) plus command path. Never a message or
-  stack trace — see Tier.OptIn.
+Reserved. The server allowlist permits some fields at this level, but this
+SDK sends nothing here beyond Tier.Basic.
 
 ### Tier.OptIn
 

@@ -24,7 +24,9 @@ import {
   AttrFlagNames,
   AttrHelpFlag,
   AttrInstallId,
+  AttrInstallMethod,
   AttrSessionId,
+  EventCommandCompleted,
   EventCommandInvoked,
   EventErrorRaised,
   EventHelpViewed,
@@ -151,6 +153,7 @@ export interface CommandResult {
 interface ClientParams {
   cliName?: string
   installIdPath?: string | undefined
+  installMethod?: string | undefined
   tracer?: Tracer
   disabled: boolean
   initError: Error | null
@@ -189,6 +192,8 @@ export class Client {
   private sessionStarted = false
   private readonly cliName: string
   private readonly installIdPath: string | undefined
+  private readonly installMethod: string | undefined
+  private installId: string | undefined
   private readonly tracer: Tracer | undefined
 
   private readonly tracerProvider: NodeTracerProvider | undefined
@@ -215,6 +220,7 @@ export class Client {
     this.errorEventsCounter = params.errorEventsCounter
     this.cliName = params.cliName ?? ''
     this.installIdPath = params.installIdPath
+    this.installMethod = params.installMethod
     this.tracer = params.tracer
   }
 
@@ -273,6 +279,21 @@ export class Client {
   }
 
   /**
+   * The session and install ID attributes for a record, empty below
+   * `Tier.Basic`. May read or create the install ID file, so call it from
+   * inside a queued job rather than on the caller's stack.
+   */
+  private identityAttrs(sessionId: string): Attributes {
+    const attrs: Attributes = {}
+    if (sessionId) attrs[AttrSessionId] = sessionId
+    if (tierAllows(this.tier, Tier.Basic)) {
+      this.installId ??= loadOrCreateInstallId(this.installIdPath)
+      if (this.installId) attrs[AttrInstallId] = this.installId
+    }
+    return attrs
+  }
+
+  /**
    * Records the start of a CLI process session, which is what the server
    * counts sessions, active installs and retention from. Call it as early
    * as possible (the yargs/commander integrations do it for you); only the
@@ -288,14 +309,9 @@ export class Client {
       if (!this.enabled() || this.sessionStarted) return
       this.sessionStarted = true
       const sessionId = this.ensureSessionId()
-      const basic = tierAllows(this.tier, Tier.Basic)
       this.queue.push(() => {
-        const attrs: Attributes = {}
-        if (sessionId) attrs[AttrSessionId] = sessionId
-        if (basic) {
-          const installId = loadOrCreateInstallId(this.installIdPath)
-          if (installId) attrs[AttrInstallId] = installId
-        }
+        const attrs = this.identityAttrs(sessionId)
+        if (this.installMethod) attrs[AttrInstallMethod] = this.installMethod
         this.emitEventNow(EventSessionStarted, SeverityNumber.INFO, attrs)
       })
     }, this.counters)
@@ -315,12 +331,16 @@ export class Client {
     safeRun(() => {
       if (!this.enabled()) return
       const attrs: Attributes = { [AttrCommandName]: this.name(commandPath) }
-      if (tierAllows(this.tier, Tier.Basic)) {
-        if (flagNames.length > 0) attrs[AttrFlagNames] = [...flagNames]
-        const id = this.ensureSessionId()
-        if (id) attrs[AttrSessionId] = id
+      if (tierAllows(this.tier, Tier.Basic) && flagNames.length > 0) {
+        attrs[AttrFlagNames] = [...flagNames]
       }
-      this.emitEvent(EventCommandInvoked, SeverityNumber.INFO, attrs)
+      const sessionId = this.ensureSessionId()
+      this.queue.push(() => {
+        this.emitEventNow(EventCommandInvoked, SeverityNumber.INFO, {
+          ...attrs,
+          ...this.identityAttrs(sessionId),
+        })
+      })
     }, this.counters)
   }
 
@@ -347,6 +367,7 @@ export class Client {
       if (tierAllows(this.tier, Tier.Basic) && result.flagNames && result.flagNames.length > 0) {
         spanAttrs[AttrFlagNames] = [...result.flagNames]
       }
+      const sessionId = this.ensureSessionId()
       this.queue.push(() => {
         const span = this.tracer?.startSpan(SpanCommandPrefix + name, {
           startTime: startMs,
@@ -356,6 +377,16 @@ export class Client {
         span?.end(startMs + durationMs)
         this.invocationsCounter?.add(1, attrs)
         this.latencyHist?.record(durationMs, attrs)
+
+        // The completed event ties the outcome to the session and install,
+        // which the span can't carry; the server's activation and friction
+        // views are built from it.
+        this.emitEventNow(EventCommandCompleted, SeverityNumber.INFO, {
+          [AttrCommandName]: name,
+          [AttrExitCode]: result.exitCode,
+          [AttrDurationMs]: Math.round(durationMs),
+          ...this.identityAttrs(sessionId),
+        })
       })
     }, this.counters)
   }
@@ -378,20 +409,27 @@ export class Client {
    * `Tier.OptIn`. Raw error detail is only reachable via {@link optIn}.
    *
    * At every tier this counts the error on the `cli.errors` metric by
-   * command. At `Tier.Full`+ the category is attached as the error type
-   * and a `cli.error.raised` event is emitted too.
+   * command. At `Tier.Basic`+ the category is attached as the error type
+   * and a `cli.error.raised` event is emitted too, tied to the session and
+   * install.
    */
   recordError(commandPath: string, category: ErrorCategory = ErrorCategoryValues.Unknown): void {
     safeRun(() => {
       if (!this.enabled()) return
       const cat = isValidErrorCategory(category) ? category : ErrorCategoryValues.Unknown
-      const full = tierAllows(this.tier, Tier.Full)
+      const basic = tierAllows(this.tier, Tier.Basic)
       const attrs: Attributes = { [AttrCommandName]: this.name(commandPath) }
-      if (full) attrs[AttrErrorType] = cat
+      if (basic) attrs[AttrErrorType] = cat
+      const sessionId = this.ensureSessionId()
       this.queue.push(() => {
         this.errorEventsCounter?.add(1, { ...this.tierAttr(), ...attrs })
+        if (basic) {
+          this.emitEventNow(EventErrorRaised, SeverityNumber.ERROR, {
+            ...attrs,
+            ...this.identityAttrs(sessionId),
+          })
+        }
       })
-      if (full) this.emitEvent(EventErrorRaised, SeverityNumber.ERROR, attrs)
     }, this.counters)
   }
 
@@ -572,6 +610,7 @@ export function createClient(
     return new Client({
       cliName,
       installIdPath: cfg.installIdPath,
+      installMethod: cfg.installMethod,
       tracer: tracerProvider.getTracer(INSTRUMENTATION_NAME),
       disabled: false,
       initError: null,

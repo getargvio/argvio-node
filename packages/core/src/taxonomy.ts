@@ -22,7 +22,9 @@ export const AttrSessionId = 'cli.session_id'
 /** `Tier.Basic`+. */
 export const AttrInstallId = 'cli.install_id'
 export const AttrHelpFlag = 'cli.help.flag'
-/** `Tier.Full`+. */
+/** How the CLI was installed; supplied by the vendor via the `installMethod` option. */
+export const AttrInstallMethod = 'cli.install.method'
+/** `Tier.Basic`+. */
 export const AttrErrorType = 'cli.error.type'
 /** `Tier.OptIn` only. */
 export const AttrErrorMessage = 'cli.error.message'
@@ -32,6 +34,7 @@ export const AttrErrorStack = 'cli.error.stacktrace'
 /** Log event names. */
 export const EventSessionStarted = 'cli.session.started'
 export const EventCommandInvoked = 'cli.command.invoked'
+export const EventCommandCompleted = 'cli.command.completed'
 export const EventHelpViewed = 'cli.help.viewed'
 export const EventErrorRaised = 'cli.error.raised'
 

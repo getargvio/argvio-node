@@ -74,6 +74,13 @@ export interface ClientOptions {
    * as `FileConsentProvider`'s consent file. `''` turns install IDs off.
    */
   installIdPath?: string
+  /**
+   * How this CLI was installed (for example `'brew'`, `'npm'`, `'curl'` or
+   * `'binary'`), reported on the session start event at every consent tier.
+   * The SDK can't tell on its own, so the vendor supplies it, typically from
+   * a value stamped in at build time. Omit to send nothing.
+   */
+  installMethod?: string
 }
 
 export interface ResolvedConfig {
@@ -92,7 +99,11 @@ export interface ResolvedConfig {
   queueSize: number
   resourceAttributes: Record<string, string>
   installIdPath: string | undefined
+  installMethod: string | undefined
 }
+
+/** The server's max_length for `cli.install.method`. */
+const MAX_INSTALL_METHOD_LENGTH = 32
 
 export function resolveConfig(
   apiKey: string,
@@ -127,5 +138,6 @@ export function resolveConfig(
       options.installIdPath !== undefined
         ? options.installIdPath || undefined
         : defaultInstallIdPath(cliName),
+    installMethod: options.installMethod?.slice(0, MAX_INSTALL_METHOD_LENGTH) || undefined,
   }
 }

@@ -63,8 +63,8 @@ Every signal carries a `cli.analytics.tier` attribute, enforced client-side:
 | Tier                  | Adds                                                           |
 | --------------------- | -------------------------------------------------------------- |
 | `Anonymous` (default) | aggregate invocation/session/exit counts only, no identifiers  |
-| `Basic`               | command path, flag names, exit code w/ path, latency w/ path   |
-| `Full`                | session correlation ID, classified error signatures            |
+| `Basic`               | command path, flag names, session and install IDs, error types |
+| `Full`                | reserved: nothing beyond `Basic` in this SDK                   |
 | `OptIn`               | raw error messages and stack traces, via `client.optIn()` only |
 
 See [`packages/core/docs/consent.md`](packages/core/docs/consent.md) for
