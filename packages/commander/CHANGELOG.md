@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.3.0](https://github.com/getargvio/argvio-node/compare/commander-v0.2.0...commander-v0.3.0) (2026-10-15)
+
+
+### ⚠ BREAKING CHANGES
+
+* emit the events, spans and attributes the server allowlist expects
+
+### Features
+
+* emit the events, spans and attributes the server allowlist expects ([2c7547a](https://github.com/getargvio/argvio-node/commit/2c7547ab6b3605488257213d00cb32e816fa5c20))
+
 ## [0.2.0](https://github.com/getargvio/argvio-node/compare/commander-v0.1.0...commander-v0.2.0) (2026-09-13)
 
 
