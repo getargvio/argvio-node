@@ -15,6 +15,7 @@ import { Tier, tierAllows, tierToString, isValidTier, RESOURCE_ATTR_TIER } from 
 import type { ErrorCategory } from './tier.js'
 import { ErrorCategory as ErrorCategoryValues, isValidErrorCategory } from './tier.js'
 import {
+  AttrActivationFeature,
   AttrCommandName,
   AttrDurationMs,
   AttrErrorMessage,
@@ -29,11 +30,13 @@ import {
   EventCommandCompleted,
   EventCommandInvoked,
   EventErrorRaised,
+  EventFeatureActivated,
   EventHelpViewed,
   EventSessionStarted,
   MetricCommandDuration,
   MetricCommandInvocations,
   MetricErrors,
+  MAX_ACTIVATION_FEATURE_LENGTH,
   SpanCommandPrefix,
   commandName,
   loadOrCreateInstallId,
@@ -194,6 +197,7 @@ export class Client {
   private readonly installIdPath: string | undefined
   private readonly installMethod: string | undefined
   private installId: string | undefined
+  private readonly activatedFeatures = new Set<string>()
   private readonly tracer: Tracer | undefined
 
   private readonly tracerProvider: NodeTracerProvider | undefined
@@ -385,6 +389,39 @@ export class Client {
           [AttrCommandName]: name,
           [AttrExitCode]: result.exitCode,
           [AttrDurationMs]: Math.round(durationMs),
+          ...this.identityAttrs(sessionId),
+        })
+      })
+    }, this.counters)
+  }
+
+  /**
+   * Records that the user used one of the vendor's features, so the server
+   * can tell which features an install has adopted and how soon after
+   * installing. Emitted at `Tier.Basic`+ only; nothing is sent at
+   * `Tier.Anonymous`. The event carries the feature name, the command name
+   * when `commandPath` is given, and the session and install IDs.
+   *
+   * `feature` must be a fixed identifier chosen by the vendor in code
+   * (e.g. `"export-csv"`), **never user input** such as a flag value, path
+   * or argument. It is truncated to the server's 64 character limit.
+   *
+   * Each feature is reported at most once per process, however often this
+   * is called, to keep volume down. The server derives "first use" per
+   * install itself, so repeat reports within a run add nothing.
+   */
+  recordFeatureActivated(feature: string, commandPath?: string): void {
+    safeRun(() => {
+      if (!this.gate(Tier.Basic)) return
+      const name = feature.slice(0, MAX_ACTIVATION_FEATURE_LENGTH)
+      if (!name || this.activatedFeatures.has(name)) return
+      this.activatedFeatures.add(name)
+      const attrs: Attributes = { [AttrActivationFeature]: name }
+      if (commandPath) attrs[AttrCommandName] = this.name(commandPath)
+      const sessionId = this.ensureSessionId()
+      this.queue.push(() => {
+        this.emitEventNow(EventFeatureActivated, SeverityNumber.INFO, {
+          ...attrs,
           ...this.identityAttrs(sessionId),
         })
       })

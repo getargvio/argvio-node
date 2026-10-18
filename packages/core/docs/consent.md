@@ -42,6 +42,7 @@ numbers even from users who've never made a choice.
 | `recordLatency`                         | duration, no command path                                        |
 | `recordHelpFlagUsage`                   | a bare "help was used" event, no command path                    |
 | `recordError`                           | `cli.errors` counter increment by command; no category, no event |
+| `recordFeatureActivated`                | nothing                                                          |
 
 ### Tier.Basic
 
@@ -56,8 +57,16 @@ Also adds:
   generated once per `Client`, not a user or device identifier, and not
   persisted anywhere — and a per-install ID (`AttrInstallId`), a random
   UUID persisted in the CLI's config directory. Both are attached to the
-  session start, command invoked, command completed and error events, so
+  session start, command invoked, command completed, feature activated and error
+  events, so
   the server can follow one install across invocations.
+- `recordFeatureActivated(feature, commandPath?)` starts emitting a
+  `cli.feature.activated` event: the feature name, the command name if
+  `commandPath` is given, and the session and install IDs. The feature name
+  must be a fixed identifier you choose in code (e.g. `"export-csv"`),
+  never user input such as a flag value, path or argument. It is truncated
+  to 64 characters, and each feature is reported at most once per process;
+  the server works out an install's first use itself.
 - `recordError` starts emitting a `cli.error.raised` event: category
   (`ErrorCategory`, e.g. `ErrorCategory.Network`) plus command path. Never
   a message or stack trace — see Tier.OptIn.
