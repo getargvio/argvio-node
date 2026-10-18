@@ -24,6 +24,8 @@ export const AttrInstallId = 'cli.install_id'
 export const AttrHelpFlag = 'cli.help.flag'
 /** How the CLI was installed; supplied by the vendor via the `installMethod` option. */
 export const AttrInstallMethod = 'cli.install.method'
+/** `Tier.Basic`+. A fixed feature identifier supplied by the vendor. */
+export const AttrActivationFeature = 'cli.activation.feature'
 /** `Tier.Basic`+. */
 export const AttrErrorType = 'cli.error.type'
 /** `Tier.OptIn` only. */
@@ -35,6 +37,7 @@ export const AttrErrorStack = 'cli.error.stacktrace'
 export const EventSessionStarted = 'cli.session.started'
 export const EventCommandInvoked = 'cli.command.invoked'
 export const EventCommandCompleted = 'cli.command.completed'
+export const EventFeatureActivated = 'cli.feature.activated'
 export const EventHelpViewed = 'cli.help.viewed'
 export const EventErrorRaised = 'cli.error.raised'
 
@@ -53,6 +56,9 @@ export const MetricErrors = 'cli.errors'
 
 /** The server's max_length for `cli.command.name`. */
 const MAX_COMMAND_NAME_LENGTH = 128
+
+/** The server's max_length for `cli.activation.feature`. */
+export const MAX_ACTIVATION_FEATURE_LENGTH = 64
 
 /**
  * Converts a command path as the CLI framework reports it

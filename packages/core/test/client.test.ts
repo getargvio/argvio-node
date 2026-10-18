@@ -76,6 +76,7 @@ describe('Client record* methods are always safe to call', () => {
       client.recordCommand({ path: 'cli sub', durationMs: 12, exitCode: 1 })
       client.recordHelpFlagUsage('cli sub')
       client.recordError('cli sub', ErrorCategory.Network)
+      client.recordFeatureActivated('export-csv', 'cli sub')
     }).not.toThrow()
   })
 
@@ -86,6 +87,8 @@ describe('Client record* methods are always safe to call', () => {
       client.recordCommandInvocation(null, undefined)
       // @ts-expect-error intentionally wrong types for the robustness test
       client.recordError(undefined, 'not-a-real-category')
+      // @ts-expect-error intentionally wrong types for the robustness test
+      client.recordFeatureActivated(null)
     }).not.toThrow()
   })
 })

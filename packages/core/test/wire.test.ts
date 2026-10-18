@@ -7,6 +7,7 @@ import type { Attributes } from '@opentelemetry/api'
 import { describe, expect, it } from 'vitest'
 
 import {
+  AttrActivationFeature,
   AttrCommandName,
   AttrDurationMs,
   AttrErrorMessage,
@@ -21,6 +22,7 @@ import {
   EventCommandCompleted,
   EventCommandInvoked,
   EventErrorRaised,
+  EventFeatureActivated,
   EventHelpViewed,
   EventSessionStarted,
   Tier,
@@ -145,6 +147,47 @@ describe('wire format', () => {
     client.recordSessionStart()
     await client.flush(500)
     expect(event(EventSessionStarted)?.attributes).not.toHaveProperty(AttrInstallMethod)
+  })
+
+  it('reports feature activations at Tier.Basic+, once per feature, tied to the install', async () => {
+    for (const tier of [Tier.Basic, Tier.Full, Tier.OptIn]) {
+      const { client, logs, event } = capturingClient(tier)
+      client.recordSessionStart()
+      client.recordFeatureActivated('export-csv', 'testcli sub')
+      client.recordFeatureActivated('export-csv')
+      client.recordFeatureActivated('dark-mode')
+      await client.flush(500)
+
+      const activations = logs.filter((l) => l.eventName === EventFeatureActivated)
+      expect(
+        activations.map((l) => l.attributes[AttrActivationFeature]),
+        String(tier),
+      ).toEqual(['export-csv', 'dark-mode'])
+      const first = activations[0]?.attributes ?? {}
+      const started = event(EventSessionStarted)?.attributes ?? {}
+      expect(first[AttrCommandName]).toBe('sub')
+      expect(first[AttrSessionId]).toBe(started[AttrSessionId])
+      expect(first[AttrInstallId]).toBe(started[AttrInstallId])
+      expect(activations[1]?.attributes).not.toHaveProperty(AttrCommandName)
+    }
+  })
+
+  it('emits no feature activation at Tier.Anonymous', async () => {
+    const { client, logs } = capturingClient(Tier.Anonymous)
+    client.recordFeatureActivated('export-csv', 'testcli sub')
+    await client.flush(500)
+    expect(logs.filter((l) => l.eventName === EventFeatureActivated)).toHaveLength(0)
+    expect(client.stats().belowTierDropped).toBe(1)
+  })
+
+  it('truncates the feature name to the server max_length and ignores an empty one', async () => {
+    const { client, logs } = capturingClient(Tier.Basic)
+    client.recordFeatureActivated('x'.repeat(100))
+    client.recordFeatureActivated('')
+    await client.flush(500)
+    const activations = logs.filter((l) => l.eventName === EventFeatureActivated)
+    expect(activations).toHaveLength(1)
+    expect(activations[0]?.attributes[AttrActivationFeature]).toBe('x'.repeat(64))
   })
 
   it('records each command as a cli.command.<name> span', async () => {
