@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 /**
@@ -19,6 +19,16 @@ export const AttrDurationMs = 'cli.command.duration_ms'
 export const AttrPeakRssBytes = 'cli.process.peak_rss_bytes'
 /** `Tier.Basic`+. User plus system CPU time of the process, in milliseconds. */
 export const AttrCpuTimeMs = 'cli.process.cpu_time_ms'
+/**
+ * `Tier.Basic`+. Size of the CLI's binary, in bytes. Only on
+ * `cli.session.started`, and only for a Node single executable application.
+ */
+export const AttrBinarySizeBytes = 'cli.binary.size_bytes'
+/**
+ * `Tier.Basic`+. Time from process start to the point the command begins
+ * running, in milliseconds. Only on `cli.session.started`.
+ */
+export const AttrStartupDurationMs = 'cli.startup.duration_ms'
 /** `Tier.Basic`+. */
 export const AttrFlagNames = 'cli.flag.names'
 /** `Tier.Basic`+. */
@@ -115,6 +125,39 @@ export function readProcessResourceUsage(): ProcessResourceUsage {
     // unsupported platform or OS error: omit
   }
   return usage
+}
+
+/**
+ * Milliseconds since this process started, which is how long module
+ * loading and framework setup took when read as the command begins
+ * running. Returns undefined, never 0, if the platform can't provide it.
+ * Never throws.
+ */
+export function readStartupDurationMs(): number | undefined {
+  try {
+    const ms = Math.round(process.uptime() * 1000)
+    return Number.isFinite(ms) && ms > 0 ? ms : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Size in bytes of the running binary, but only when this is a Node single
+ * executable application (`node:sea` `isSea()`), where `process.execPath`
+ * is the vendor's build. In any other case `process.execPath` is the
+ * generic `node` binary, not the vendor's, so nothing is reported. At most
+ * one `stat`. Returns undefined, never 0, on any failure. Never throws.
+ */
+export function readBinarySizeBytes(): number | undefined {
+  try {
+    const sea = process.getBuiltinModule?.('node:sea')
+    if (!sea?.isSea()) return undefined
+    const size = statSync(process.execPath).size
+    return Number.isFinite(size) && size > 0 ? size : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /** A random, non-persistent per-process session correlation ID. Not a user or device identifier. */

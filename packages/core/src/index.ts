@@ -39,6 +39,8 @@ export {
   AttrDurationMs,
   AttrPeakRssBytes,
   AttrCpuTimeMs,
+  AttrBinarySizeBytes,
+  AttrStartupDurationMs,
   AttrFlagNames,
   AttrSessionId,
   AttrInstallId,

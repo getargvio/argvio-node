@@ -44,6 +44,7 @@ numbers even from users who've never made a choice.
 | `recordError`                           | `cli.errors` counter increment by command; no category, no event |
 | `recordFeatureActivated`                | nothing                                                          |
 | `recordCommand` memory and CPU time     | nothing                                                          |
+| `recordSessionStart` size and startup   | nothing                                                          |
 
 ### Tier.Basic
 
@@ -78,6 +79,25 @@ Also adds:
   multi-command process each report covers everything since the process
   started. If the platform can't provide a figure, or reports zero, it is
   omitted rather than sent. Nothing is sent at `Tier.Anonymous`.
+- `recordSessionStart` adds two optional attributes to the
+  `cli.session.started` event, once per process:
+  - `cli.startup.duration_ms` (startup overhead, in milliseconds) is
+    `process.uptime()` read when `recordSessionStart` is called. The
+    yargs and commander integrations call it as parsing begins, just
+    before the command runs, so it covers everything from process start
+    until then: Node bootstrap, your module loading and framework setup.
+    If you call `recordSessionStart` yourself, call it at that same point.
+  - `cli.binary.size_bytes` (binary size, in bytes) is reported only when
+    running as a [Node single executable application](https://nodejs.org/api/single-executable-applications.html)
+    (`node:sea` `isSea()`), where `process.execPath` is your build; it is
+    the size of that file, from one `stat` per process. Node has no single
+    CLI binary otherwise (`process.execPath` would be the generic `node`),
+    so the attribute is omitted. A Node that can't tell (before 22.3) also
+    omits it.
+
+  Either is omitted, never sent as zero, if it can't be read. Nothing is
+  sent at `Tier.Anonymous`.
+
 - `recordError` starts emitting a `cli.error.raised` event: category
   (`ErrorCategory`, e.g. `ErrorCategory.Network`) plus command path. Never
   a message or stack trace — see Tier.OptIn.

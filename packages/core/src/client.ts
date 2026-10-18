@@ -28,6 +28,8 @@ import {
   AttrInstallMethod,
   AttrPeakRssBytes,
   AttrCpuTimeMs,
+  AttrBinarySizeBytes,
+  AttrStartupDurationMs,
   AttrSessionId,
   EventCommandCompleted,
   EventCommandInvoked,
@@ -43,7 +45,9 @@ import {
   commandName,
   loadOrCreateInstallId,
   newSessionId,
+  readBinarySizeBytes,
   readProcessResourceUsage,
+  readStartupDurationMs,
 } from './taxonomy.js'
 import type { Stats } from './safety.js'
 import { ARGVIO_DEBUG, DroppedCounters, safeRun } from './safety.js'
@@ -310,14 +314,29 @@ export class Client {
    * it also carries the per-process session ID and the install ID, a
    * random UUID persisted in the CLI's config directory the first time it
    * is needed — never derived from the user or machine.
+   *
+   * At `Tier.Basic`+ it also carries startup overhead
+   * (`cli.startup.duration_ms`): the time from process start to this call,
+   * so it covers module loading and framework setup. Call it just before
+   * the command runs, as the integrations do. And when running as a Node
+   * single executable application, it carries the binary's size
+   * (`cli.binary.size_bytes`). Either is omitted if unavailable, never 0.
    */
   recordSessionStart(): void {
     safeRun(() => {
       if (!this.enabled() || this.sessionStarted) return
       this.sessionStarted = true
       const sessionId = this.ensureSessionId()
+      const basic = tierAllows(this.tier, Tier.Basic)
+      // Read now rather than in the queued job, which runs on a later tick.
+      const startupMs = basic ? readStartupDurationMs() : undefined
       this.queue.push(() => {
         const attrs = this.identityAttrs(sessionId)
+        if (startupMs !== undefined) attrs[AttrStartupDurationMs] = startupMs
+        if (basic) {
+          const sizeBytes = readBinarySizeBytes()
+          if (sizeBytes !== undefined) attrs[AttrBinarySizeBytes] = sizeBytes
+        }
         if (this.installMethod) attrs[AttrInstallMethod] = this.installMethod
         this.emitEventNow(EventSessionStarted, SeverityNumber.INFO, attrs)
       })
