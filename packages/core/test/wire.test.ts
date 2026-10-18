@@ -16,9 +16,11 @@ import {
   AttrFlagNames,
   AttrInstallId,
   AttrInstallMethod,
+  AttrBinarySizeBytes,
   AttrCpuTimeMs,
   AttrPeakRssBytes,
   AttrSessionId,
+  AttrStartupDurationMs,
   Client,
   ErrorCategory,
   EventCommandCompleted,
@@ -29,7 +31,13 @@ import {
   EventSessionStarted,
   Tier,
 } from '../src/index.js'
-import { commandName, loadOrCreateInstallId, readProcessResourceUsage } from '../src/taxonomy.js'
+import {
+  commandName,
+  loadOrCreateInstallId,
+  readBinarySizeBytes,
+  readProcessResourceUsage,
+  readStartupDurationMs,
+} from '../src/taxonomy.js'
 
 interface LogRecord {
   eventName: string
@@ -304,6 +312,166 @@ describe('wire format', () => {
     expect(event(EventErrorRaised)?.attributes[AttrErrorType]).toBe('network')
     expect(event(EventErrorRaised)?.attributes).not.toHaveProperty(AttrErrorMessage)
     expect(event(EventHelpViewed)?.attributes[AttrCommandName]).toBe('sub')
+  })
+})
+
+// Pretends to be a Node single executable application whose binary is `size`
+// bytes, for the duration of `fn`.
+async function asSea(size: number | null, fn: () => Promise<void> | void): Promise<void> {
+  const original = Object.getOwnPropertyDescriptor(process, 'execPath')!
+  const getBuiltinModule = vi
+    .spyOn(process, 'getBuiltinModule')
+    .mockImplementation(((id: string) =>
+      id === 'node:sea' ? { isSea: () => size !== null } : undefined) as never)
+  const execPath = join(mkdtempSync(join(tmpdir(), 'argvio-sea-')), 'mycli')
+  writeFileSync(execPath, Buffer.alloc(size ?? 0))
+  Object.defineProperty(process, 'execPath', { ...original, value: execPath })
+  try {
+    await fn()
+  } finally {
+    Object.defineProperty(process, 'execPath', original)
+    getBuiltinModule.mockRestore()
+  }
+}
+
+describe('session start binary size and startup overhead', () => {
+  it('reports startup overhead in whole milliseconds at Tier.Basic+, on the session start only', async () => {
+    const uptime = vi.spyOn(process, 'uptime').mockReturnValue(0.4567)
+    try {
+      for (const tier of [Tier.Basic, Tier.Full, Tier.OptIn]) {
+        const { client, logs, event } = capturingClient(tier)
+        client.recordSessionStart()
+        client.recordCommand({ path: 'testcli run', durationMs: 5, exitCode: 0 })
+        await client.flush(500)
+
+        expect(AttrStartupDurationMs).toBe('cli.startup.duration_ms')
+        expect(event(EventSessionStarted)?.attributes[AttrStartupDurationMs]).toBe(457)
+        for (const log of logs.filter((l) => l.eventName !== EventSessionStarted)) {
+          expect(log.attributes).not.toHaveProperty(AttrStartupDurationMs)
+          expect(log.attributes).not.toHaveProperty(AttrBinarySizeBytes)
+        }
+      }
+    } finally {
+      uptime.mockRestore()
+    }
+  })
+
+  it('reads startup overhead when recordSessionStart is called, not when the job runs', async () => {
+    const uptime = vi.spyOn(process, 'uptime').mockReturnValue(0.25)
+    try {
+      const { client, event } = capturingClient(Tier.Basic)
+      client.recordSessionStart()
+      uptime.mockReturnValue(9)
+      await client.flush(500)
+      expect(event(EventSessionStarted)?.attributes[AttrStartupDurationMs]).toBe(250)
+    } finally {
+      uptime.mockRestore()
+    }
+  })
+
+  it('sends neither at Tier.Anonymous', async () => {
+    await asSea(4096, async () => {
+      const { client, event } = capturingClient(Tier.Anonymous)
+      client.recordSessionStart()
+      await client.flush(500)
+
+      expect(event(EventSessionStarted)).toBeDefined()
+      expect(event(EventSessionStarted)?.attributes).not.toHaveProperty(AttrStartupDurationMs)
+      expect(event(EventSessionStarted)?.attributes).not.toHaveProperty(AttrBinarySizeBytes)
+    })
+  })
+
+  it('reports the binary size at Tier.Basic+ when running as a single executable application', async () => {
+    await asSea(4096, async () => {
+      for (const tier of [Tier.Basic, Tier.Full, Tier.OptIn]) {
+        const { client, event } = capturingClient(tier)
+        client.recordSessionStart()
+        await client.flush(500)
+
+        expect(AttrBinarySizeBytes).toBe('cli.binary.size_bytes')
+        expect(event(EventSessionStarted)?.attributes[AttrBinarySizeBytes]).toBe(4096)
+      }
+    })
+  })
+
+  it('omits the binary size when not a single executable application', async () => {
+    const { client, event } = capturingClient(Tier.Basic)
+    client.recordSessionStart()
+    await client.flush(500)
+
+    expect(event(EventSessionStarted)?.attributes).not.toHaveProperty(AttrBinarySizeBytes)
+    expect(readBinarySizeBytes()).toBeUndefined()
+  })
+
+  it('omits the binary size, and still starts the session, when it cannot be read', async () => {
+    const getBuiltinModule = vi.spyOn(process, 'getBuiltinModule').mockImplementation((() => {
+      throw new Error('boom')
+    }) as never)
+    try {
+      const { client, event } = capturingClient(Tier.Basic)
+      client.recordSessionStart()
+      await client.flush(500)
+
+      expect(event(EventSessionStarted)).toBeDefined()
+      expect(event(EventSessionStarted)?.attributes).not.toHaveProperty(AttrBinarySizeBytes)
+    } finally {
+      getBuiltinModule.mockRestore()
+    }
+  })
+
+  it('omits the binary size when the file is empty or missing, never sending zero', async () => {
+    await asSea(0, () => {
+      // isSea() is true here, but the file is empty.
+      expect(readBinarySizeBytes()).toBeUndefined()
+    })
+    const getBuiltinModule = vi
+      .spyOn(process, 'getBuiltinModule')
+      .mockImplementation((() => ({ isSea: () => true })) as never)
+    const original = Object.getOwnPropertyDescriptor(process, 'execPath')!
+    Object.defineProperty(process, 'execPath', { ...original, value: '/nonexistent/mycli' })
+    try {
+      expect(readBinarySizeBytes()).toBeUndefined()
+    } finally {
+      Object.defineProperty(process, 'execPath', original)
+      getBuiltinModule.mockRestore()
+    }
+  })
+
+  it('omits the binary size where process.getBuiltinModule is missing', () => {
+    const original = Object.getOwnPropertyDescriptor(process, 'getBuiltinModule')!
+    Object.defineProperty(process, 'getBuiltinModule', { ...original, value: undefined })
+    try {
+      expect(readBinarySizeBytes()).toBeUndefined()
+    } finally {
+      Object.defineProperty(process, 'getBuiltinModule', original)
+    }
+  })
+
+  it('omits startup overhead when it is zero, negative, non-finite or throws', () => {
+    for (const value of [0, -1, NaN, Infinity]) {
+      const uptime = vi.spyOn(process, 'uptime').mockReturnValue(value)
+      try {
+        expect(readStartupDurationMs()).toBeUndefined()
+      } finally {
+        uptime.mockRestore()
+      }
+    }
+    const uptime = vi.spyOn(process, 'uptime').mockImplementation(() => {
+      throw new Error('ENOSYS')
+    })
+    try {
+      expect(readStartupDurationMs()).toBeUndefined()
+    } finally {
+      uptime.mockRestore()
+    }
+  })
+
+  it('does not report on a second recordSessionStart', async () => {
+    const { client, logs } = capturingClient(Tier.Basic)
+    client.recordSessionStart()
+    client.recordSessionStart()
+    await client.flush(500)
+    expect(logs.filter((l) => l.eventName === EventSessionStarted)).toHaveLength(1)
   })
 })
 
