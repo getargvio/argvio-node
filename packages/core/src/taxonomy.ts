@@ -15,6 +15,10 @@ import { dirname } from 'node:path'
 export const AttrCommandName = 'cli.command.name'
 export const AttrExitCode = 'cli.command.exit_code'
 export const AttrDurationMs = 'cli.command.duration_ms'
+/** `Tier.Basic`+. Peak resident set size of the process, in bytes. */
+export const AttrPeakRssBytes = 'cli.process.peak_rss_bytes'
+/** `Tier.Basic`+. User plus system CPU time of the process, in milliseconds. */
+export const AttrCpuTimeMs = 'cli.process.cpu_time_ms'
 /** `Tier.Basic`+. */
 export const AttrFlagNames = 'cli.flag.names'
 /** `Tier.Basic`+. */
@@ -72,6 +76,45 @@ export function commandName(cliName: string, commandPath: string): string {
   if (parts.length > 1 && parts[0] === cliName) parts = parts.slice(1)
   const name = parts.join('.') || cliName || 'root'
   return name.slice(0, MAX_COMMAND_NAME_LENGTH)
+}
+
+/**
+ * Process-wide resource usage so far. Both figures are cumulative for the
+ * whole process, not per command; a CLI normally runs one command per
+ * process, so they describe that command.
+ */
+export interface ProcessResourceUsage {
+  /** Peak resident set size, in bytes. */
+  peakRssBytes?: number
+  /** User plus system CPU time, in milliseconds. */
+  cpuTimeMs?: number
+}
+
+/**
+ * Reads the process's peak RSS and CPU time with two cheap synchronous
+ * calls: no sampling, no timers. A measure the platform can't provide (the
+ * call throws, or reports zero, negative or non-finite) is omitted rather
+ * than reported as 0, which the server treats as "not reported" anyway.
+ * Never throws.
+ */
+export function readProcessResourceUsage(): ProcessResourceUsage {
+  const usage: ProcessResourceUsage = {}
+  try {
+    // maxRSS is in kilobytes.
+    const rssBytes = Math.round(process.resourceUsage().maxRSS * 1024)
+    if (Number.isFinite(rssBytes) && rssBytes > 0) usage.peakRssBytes = rssBytes
+  } catch {
+    // unsupported platform or OS error: omit
+  }
+  try {
+    // user and system are in microseconds.
+    const { user, system } = process.cpuUsage()
+    const cpuMs = Math.round((user + system) / 1000)
+    if (Number.isFinite(cpuMs) && cpuMs > 0) usage.cpuTimeMs = cpuMs
+  } catch {
+    // unsupported platform or OS error: omit
+  }
+  return usage
 }
 
 /** A random, non-persistent per-process session correlation ID. Not a user or device identifier. */

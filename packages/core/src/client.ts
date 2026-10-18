@@ -26,6 +26,8 @@ import {
   AttrHelpFlag,
   AttrInstallId,
   AttrInstallMethod,
+  AttrPeakRssBytes,
+  AttrCpuTimeMs,
   AttrSessionId,
   EventCommandCompleted,
   EventCommandInvoked,
@@ -41,6 +43,7 @@ import {
   commandName,
   loadOrCreateInstallId,
   newSessionId,
+  readProcessResourceUsage,
 } from './taxonomy.js'
 import type { Stats } from './safety.js'
 import { ARGVIO_DEBUG, DroppedCounters, safeRun } from './safety.js'
@@ -354,7 +357,15 @@ export class Client {
    * `cli.command.duration` metrics. This is what the server's command
    * frequency, latency, error-rate and exit-code dashboards are built
    * from, so call it once for every command that ran (the integrations
-   * do). Available at every tier; flag names only at `Tier.Basic`+.
+   * do). Available at every tier; flag names, peak memory and CPU time
+   * only at `Tier.Basic`+.
+   *
+   * Peak memory (`cli.process.peak_rss_bytes`) and CPU time
+   * (`cli.process.cpu_time_ms`) are read once from the process, so they are
+   * process-wide and cumulative: right for a CLI that runs one command per
+   * process, but in a long-lived or multi-command process each call
+   * reports totals since the process started. A measure the platform can't
+   * provide is omitted.
    */
   recordCommand(result: CommandResult): void {
     safeRun(() => {
@@ -370,6 +381,13 @@ export class Client {
       const spanAttrs: Attributes = { ...attrs, [AttrDurationMs]: Math.round(durationMs) }
       if (tierAllows(this.tier, Tier.Basic) && result.flagNames && result.flagNames.length > 0) {
         spanAttrs[AttrFlagNames] = [...result.flagNames]
+      }
+      if (tierAllows(this.tier, Tier.Basic)) {
+        // Read now, as the command completes, rather than in the queued job,
+        // which runs on a later tick.
+        const { peakRssBytes, cpuTimeMs } = readProcessResourceUsage()
+        if (peakRssBytes !== undefined) spanAttrs[AttrPeakRssBytes] = peakRssBytes
+        if (cpuTimeMs !== undefined) spanAttrs[AttrCpuTimeMs] = cpuTimeMs
       }
       const sessionId = this.ensureSessionId()
       this.queue.push(() => {
