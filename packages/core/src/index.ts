@@ -37,6 +37,8 @@ export {
   AttrCommandName,
   AttrExitCode,
   AttrDurationMs,
+  AttrPeakRssBytes,
+  AttrCpuTimeMs,
   AttrFlagNames,
   AttrSessionId,
   AttrInstallId,

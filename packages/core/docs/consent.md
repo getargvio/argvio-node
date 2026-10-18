@@ -43,6 +43,7 @@ numbers even from users who've never made a choice.
 | `recordHelpFlagUsage`                   | a bare "help was used" event, no command path                    |
 | `recordError`                           | `cli.errors` counter increment by command; no category, no event |
 | `recordFeatureActivated`                | nothing                                                          |
+| `recordCommand` memory and CPU time     | nothing                                                          |
 
 ### Tier.Basic
 
@@ -67,6 +68,16 @@ Also adds:
   never user input such as a flag value, path or argument. It is truncated
   to 64 characters, and each feature is reported at most once per process;
   the server works out an install's first use itself.
+- `recordCommand` adds two measures to the `cli.command.<name>` span:
+  `cli.process.peak_rss_bytes` (peak resident memory, in bytes) and
+  `cli.process.cpu_time_ms` (user plus system CPU time, in milliseconds).
+  Both are read once, when the command completes, from
+  `process.resourceUsage().maxRSS` and `process.cpuUsage()`. They are
+  **process-wide and cumulative**, not per command: a CLI that runs one
+  command per process gets that command's figures, but in a long-lived or
+  multi-command process each report covers everything since the process
+  started. If the platform can't provide a figure, or reports zero, it is
+  omitted rather than sent. Nothing is sent at `Tier.Anonymous`.
 - `recordError` starts emitting a `cli.error.raised` event: category
   (`ErrorCategory`, e.g. `ErrorCategory.Network`) plus command path. Never
   a message or stack trace — see Tier.OptIn.

@@ -4,7 +4,7 @@ import { join } from 'node:path'
 
 import { SpanStatusCode } from '@opentelemetry/api'
 import type { Attributes } from '@opentelemetry/api'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import {
   AttrActivationFeature,
@@ -16,6 +16,8 @@ import {
   AttrFlagNames,
   AttrInstallId,
   AttrInstallMethod,
+  AttrCpuTimeMs,
+  AttrPeakRssBytes,
   AttrSessionId,
   Client,
   ErrorCategory,
@@ -27,7 +29,7 @@ import {
   EventSessionStarted,
   Tier,
 } from '../src/index.js'
-import { commandName, loadOrCreateInstallId } from '../src/taxonomy.js'
+import { commandName, loadOrCreateInstallId, readProcessResourceUsage } from '../src/taxonomy.js'
 
 interface LogRecord {
   eventName: string
@@ -211,6 +213,86 @@ describe('wire format', () => {
     expect(span.startTime).toBe(1_000)
     expect(span.endTime).toBe(1_250)
     expect(span.status?.code).toBe(SpanStatusCode.ERROR)
+  })
+
+  it('reports peak memory and CPU time on the span at Tier.Basic+, in bytes and milliseconds', async () => {
+    for (const tier of [Tier.Basic, Tier.Full, Tier.OptIn]) {
+      const { client, spans, event } = capturingClient(tier)
+      client.recordCommand({ path: 'testcli run', durationMs: 10, exitCode: 0 })
+      await client.flush(500)
+
+      const attrs = spans[0]!.attributes
+      expect(AttrPeakRssBytes).toBe('cli.process.peak_rss_bytes')
+      expect(AttrCpuTimeMs).toBe('cli.process.cpu_time_ms')
+      expect(Number.isInteger(attrs[AttrPeakRssBytes])).toBe(true)
+      expect(Number.isInteger(attrs[AttrCpuTimeMs])).toBe(true)
+      // Bytes, not the kilobytes the OS reports: a Node process is well over 1 MiB.
+      expect(attrs[AttrPeakRssBytes] as number).toBeGreaterThan(1024 * 1024)
+      // The server's allowlist only accepts these on the span.
+      expect(event(EventCommandCompleted)?.attributes).not.toHaveProperty(AttrPeakRssBytes)
+      expect(event(EventCommandCompleted)?.attributes).not.toHaveProperty(AttrCpuTimeMs)
+    }
+  })
+
+  it('sends no memory or CPU figures at Tier.Anonymous', async () => {
+    const { client, spans, logs } = capturingClient(Tier.Anonymous)
+    client.recordCommand({ path: 'testcli run', durationMs: 10, exitCode: 0 })
+    await client.flush(500)
+
+    expect(spans[0]!.attributes).not.toHaveProperty(AttrPeakRssBytes)
+    expect(spans[0]!.attributes).not.toHaveProperty(AttrCpuTimeMs)
+    for (const log of logs) {
+      expect(log.attributes).not.toHaveProperty(AttrPeakRssBytes)
+      expect(log.attributes).not.toHaveProperty(AttrCpuTimeMs)
+    }
+  })
+
+  it('omits the figures, and still records the command, when the OS call fails', async () => {
+    const resourceUsage = vi.spyOn(process, 'resourceUsage').mockImplementation(() => {
+      throw new Error('ENOSYS')
+    })
+    const cpuUsage = vi.spyOn(process, 'cpuUsage').mockImplementation(() => {
+      throw new Error('ENOSYS')
+    })
+    try {
+      const { client, spans } = capturingClient(Tier.Basic)
+      client.recordCommand({ path: 'testcli run', durationMs: 10, exitCode: 0 })
+      await client.flush(500)
+
+      expect(spans).toHaveLength(1)
+      expect(spans[0]!.attributes[AttrDurationMs]).toBe(10)
+      expect(spans[0]!.attributes).not.toHaveProperty(AttrPeakRssBytes)
+      expect(spans[0]!.attributes).not.toHaveProperty(AttrCpuTimeMs)
+    } finally {
+      resourceUsage.mockRestore()
+      cpuUsage.mockRestore()
+    }
+  })
+
+  it('normalises kilobytes to bytes and microseconds to milliseconds', () => {
+    const resourceUsage = vi
+      .spyOn(process, 'resourceUsage')
+      .mockReturnValue({ maxRSS: 2048 } as NodeJS.ResourceUsage)
+    const cpuUsage = vi.spyOn(process, 'cpuUsage').mockReturnValue({ user: 1_500, system: 2_000 })
+    try {
+      expect(readProcessResourceUsage()).toEqual({ peakRssBytes: 2_097_152, cpuTimeMs: 4 })
+    } finally {
+      resourceUsage.mockRestore()
+      cpuUsage.mockRestore()
+    }
+  })
+
+  it('treats zero, negative and non-finite readings as not reported', () => {
+    const resourceUsage = vi
+      .spyOn(process, 'resourceUsage')
+      .mockReturnValue({ maxRSS: 0 } as NodeJS.ResourceUsage)
+    const cpuUsage = vi.spyOn(process, 'cpuUsage').mockReturnValue({ user: NaN, system: 0 })
+    try {
+      expect(readProcessResourceUsage()).toEqual({})
+    } finally {
+      resourceUsage.mockRestore()
+      cpuUsage.mockRestore()
+    }
   })
 
   it('keeps raw error detail out of Tier.Full, which only classifies errors', async () => {
