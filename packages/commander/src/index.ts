@@ -3,12 +3,19 @@ import type { Command } from 'commander'
 
 import type { Client, ClientOptions } from '@getargvio/argvio'
 import { createClient, ErrorCategory } from '@getargvio/argvio'
-import type { ErrorCategory as ErrorCategoryType } from '@getargvio/argvio'
+import type { ErrorCategory as ErrorCategoryType, ErrorClassification } from '@getargvio/argvio'
 
 /** Configures {@link instrumentCommander}. */
 export interface CommanderHookOptions {
-  /** Maps a caught error to an {@link ErrorCategoryType}. Without it, every error is recorded as `ErrorCategory.Unknown`. */
-  classify?: (err: Error) => ErrorCategoryType
+  /**
+   * Maps a caught error to an {@link ErrorCategoryType}, or to
+   * `{ category, reason }` to also report a fixed-vocabulary reason (e.g.
+   * `"no-token"`). The reason must be an identifier chosen in code
+   * (`^[a-z0-9][a-z0-9._-]*$`, at most 64 bytes), never error text or user
+   * input; one that doesn't match is dropped. Without `classify`, every
+   * error is recorded as `ErrorCategory.Unknown` with no reason.
+   */
+  classify?: (err: Error) => ErrorCategoryType | ErrorClassification
   /** Skip the `outputHelp` wrapping. */
   captureHelp?: boolean
   /** Skip the `preAction` hook-based command-invocation capture. */
@@ -125,7 +132,10 @@ export function instrumentCommander(
       if (!isControlFlowExit(err)) {
         recordCommand(1)
         const error = err instanceof Error ? err : new Error(String(err))
-        client.recordError(lastCommandPath, classify(error))
+        const classified = classify(error)
+        const { category, reason } =
+          typeof classified === 'string' ? { category: classified } : classified
+        client.recordError(lastCommandPath, category, reason)
       }
       throw err
     }

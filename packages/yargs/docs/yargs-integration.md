@@ -117,6 +117,17 @@ instrumentYargs(yargsInstance, client, {
 })
 ```
 
+`classify(err)` — maps a caught error to an `ErrorCategory`, or
+to `{ category, reason }` to also report a fixed-vocabulary reason
+(sent at `Tier.Basic`+ as `cli.error.reason`). The reason must be an
+identifier you chose in code (`^[a-z0-9][a-z0-9._-]*$`, at most 64
+bytes), never error text or user input; one that doesn't match is
+dropped. Without it, every error is recorded as `ErrorCategory.Unknown`
+with no reason. This package deliberately doesn't try to guess either
+from an error's message or type; only your own error handling knows
+which of your errors are user mistakes vs. network failures vs.
+internal bugs.
+
 ## Worked example
 
 ```ts
@@ -127,7 +138,7 @@ import { ErrorCategory } from '@getargvio/argvio'
 
 function classifyDeployError(err: Error) {
   return err.message.includes('invalid deploy configuration')
-    ? ErrorCategory.Validation
+    ? { category: ErrorCategory.Validation, reason: 'invalid-deploy-config' }
     : ErrorCategory.Unknown
 }
 

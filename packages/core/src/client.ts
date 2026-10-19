@@ -17,8 +17,11 @@ import { ErrorCategory as ErrorCategoryValues, isValidErrorCategory } from './ti
 import {
   AttrActivationFeature,
   AttrCommandName,
+  AttrCounterLabel,
+  AttrCounterName,
   AttrDurationMs,
   AttrErrorMessage,
+  AttrErrorReason,
   AttrErrorStack,
   AttrErrorType,
   AttrExitCode,
@@ -39,10 +42,12 @@ import {
   EventSessionStarted,
   MetricCommandDuration,
   MetricCommandInvocations,
+  MetricCounter,
   MetricErrors,
   MAX_ACTIVATION_FEATURE_LENGTH,
   SpanCommandPrefix,
   commandName,
+  isValidIdentifier,
   loadOrCreateInstallId,
   newSessionId,
   readBinarySizeBytes,
@@ -146,6 +151,15 @@ function toError(value: unknown): Error {
   return value instanceof Error ? value : new Error(String(value))
 }
 
+/** Options for {@link Client.recordCounter}. */
+export interface CounterOptions {
+  /**
+   * Splits the counter into series (e.g. a tool or HTTP verb). A fixed
+   * identifier chosen in code, subject to the same rules as the counter name.
+   */
+  label?: string
+}
+
 /** One completed command, for {@link Client.recordCommand}. */
 export interface CommandResult {
   /** The full command path, as for {@link Client.recordCommandInvocation}. */
@@ -177,6 +191,7 @@ interface ClientParams {
   latencyHist?: Histogram
   invocationsCounter?: Counter
   errorEventsCounter?: Counter
+  productCounter?: Counter
 }
 
 /**
@@ -214,6 +229,7 @@ export class Client {
   private readonly latencyHist: Histogram | undefined
   private readonly invocationsCounter: Counter | undefined
   private readonly errorEventsCounter: Counter | undefined
+  private readonly productCounter: Counter | undefined
 
   /** @internal use {@link createClient} */
   constructor(params: ClientParams) {
@@ -229,6 +245,7 @@ export class Client {
     this.latencyHist = params.latencyHist
     this.invocationsCounter = params.invocationsCounter
     this.errorEventsCounter = params.errorEventsCounter
+    this.productCounter = params.productCounter
     this.cliName = params.cliName ?? ''
     this.installIdPath = params.installIdPath
     this.installMethod = params.installMethod
@@ -486,14 +503,28 @@ export class Client {
    * command. At `Tier.Basic`+ the category is attached as the error type
    * and a `cli.error.raised` event is emitted too, tied to the session and
    * install.
+   *
+   * `reason` is an optional, finer classification from a fixed vocabulary
+   * you define (e.g. `"no-token"`, `"invalid-url"`), sent at `Tier.Basic`+
+   * as `cli.error.reason` on both of those. It must be an identifier chosen
+   * in code, **never error text or user input**: this SDK does not scrub it.
+   * It must match `^[a-z0-9][a-z0-9._-]*$` and be at most 64 bytes; one that
+   * doesn't is dropped (the error is still recorded, without a reason).
    */
-  recordError(commandPath: string, category: ErrorCategory = ErrorCategoryValues.Unknown): void {
+  recordError(
+    commandPath: string,
+    category: ErrorCategory = ErrorCategoryValues.Unknown,
+    reason?: string,
+  ): void {
     safeRun(() => {
       if (!this.enabled()) return
       const cat = isValidErrorCategory(category) ? category : ErrorCategoryValues.Unknown
       const basic = tierAllows(this.tier, Tier.Basic)
       const attrs: Attributes = { [AttrCommandName]: this.name(commandPath) }
-      if (basic) attrs[AttrErrorType] = cat
+      if (basic) {
+        attrs[AttrErrorType] = cat
+        if (isValidIdentifier(reason)) attrs[AttrErrorReason] = reason
+      }
       const sessionId = this.ensureSessionId()
       this.queue.push(() => {
         this.errorEventsCounter?.add(1, { ...this.tierAttr(), ...attrs })
@@ -504,6 +535,45 @@ export class Client {
           })
         }
       })
+    }, this.counters)
+  }
+
+  /**
+   * Adds `n` to a vendor-defined counter, sent as the `cli.counter` metric
+   * with the `cli.counter.name` and, if given, `cli.counter.label`
+   * attributes. Increments are summed in memory: one data point per name
+   * and label is sent at each export, however often this is called, so it
+   * is cheap in a hot loop.
+   *
+   * **Counters are accepted at the anonymous tier.** They are sent at every
+   * tier, including `Tier.Anonymous` and in CI, even when the user has made
+   * no consent choice. Nothing identifies the user, but `name` and `label`
+   * are strings you choose, so a mistake here puts text into anonymous
+   * data. They must be fixed identifiers chosen in code, **never user
+   * input, file paths, host names, URLs, tokens or anything derived from
+   * them**. This SDK does not scrub them.
+   *
+   * `name` and `label` must match `^[a-z0-9][a-z0-9._-]*$` and be at most
+   * 64 bytes. If either does not, nothing is recorded: the increment is
+   * dropped, not trimmed or sent without its label. `n` must be a positive
+   * integer; anything else is ignored. The server caps the number of
+   * distinct names and labels per tenant and folds the rest into `other`.
+   *
+   * Never throws, and does nothing on a disabled Client.
+   */
+  recordCounter(name: string, n: number, options: CounterOptions = {}): void {
+    safeRun(() => {
+      if (!this.gate(Tier.Anonymous)) return
+      if (!isValidIdentifier(name)) return
+      if (typeof n !== 'number' || !Number.isSafeInteger(n) || n <= 0) return
+      const label = options?.label
+      if (label !== undefined && !isValidIdentifier(label)) return
+      const attrs: Attributes = { ...this.tierAttr(), [AttrCounterName]: name }
+      if (label !== undefined) attrs[AttrCounterLabel] = label
+      // Straight into the OTel counter, not the job queue: it sums per
+      // attribute set in memory, so a hot loop neither allocates a record
+      // per call nor overflows the queue.
+      this.productCounter?.add(n, attrs)
     }, this.counters)
   }
 
@@ -706,6 +776,10 @@ export function createClient(
       errorEventsCounter: meter.createCounter(MetricErrors, {
         unit: '1',
         description: 'Count of recorded CLI errors.',
+      }),
+      productCounter: meter.createCounter(MetricCounter, {
+        unit: '1',
+        description: 'Vendor-defined counters, by fixed name and optional label.',
       }),
     })
   } catch (err) {

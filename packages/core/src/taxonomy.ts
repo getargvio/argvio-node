@@ -42,10 +42,26 @@ export const AttrInstallMethod = 'cli.install.method'
 export const AttrActivationFeature = 'cli.activation.feature'
 /** `Tier.Basic`+. */
 export const AttrErrorType = 'cli.error.type'
+/**
+ * `Tier.Basic`+. A vendor-assigned reason from a fixed vocabulary, alongside
+ * the error type. Never error text.
+ */
+export const AttrErrorReason = 'cli.error.reason'
 /** `Tier.OptIn` only. */
 export const AttrErrorMessage = 'cli.error.message'
 /** `Tier.OptIn` only. */
 export const AttrErrorStack = 'cli.error.stacktrace'
+
+/**
+ * Every tier. The name of a vendor-defined counter, a fixed identifier
+ * chosen in code. Sent on `cli.counter`.
+ */
+export const AttrCounterName = 'cli.counter.name'
+/**
+ * Every tier. An optional fixed identifier that splits one counter into
+ * series, chosen in code. Sent on `cli.counter`.
+ */
+export const AttrCounterLabel = 'cli.counter.label'
 
 /** Log event names. */
 export const EventSessionStarted = 'cli.session.started'
@@ -67,12 +83,34 @@ export const MetricCommandInvocations = 'cli.command.invocations'
 /** Unit: milliseconds. */
 export const MetricCommandDuration = 'cli.command.duration'
 export const MetricErrors = 'cli.errors'
+/** Unit: 1. A vendor-defined counter, see {@link Client.recordCounter}. */
+export const MetricCounter = 'cli.counter'
 
 /** The server's max_length for `cli.command.name`. */
 const MAX_COMMAND_NAME_LENGTH = 128
 
 /** The server's max_length for `cli.activation.feature`. */
 export const MAX_ACTIVATION_FEATURE_LENGTH = 64
+
+/** The server's max_length for `cli.error.reason`, `cli.counter.name` and `cli.counter.label`. */
+const MAX_IDENTIFIER_LENGTH = 64
+
+/** The server's pattern for `cli.error.reason`, `cli.counter.name` and `cli.counter.label`. */
+const IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9._-]*$/
+
+/**
+ * Reports whether `value` is acceptable as an error reason, counter name or
+ * counter label: the server's `^[a-z0-9][a-z0-9._-]*$` and at most 64
+ * bytes (the pattern is ASCII only, so that is 64 characters). A value that
+ * fails is dropped by the caller, never trimmed or rewritten into shape.
+ */
+export function isValidIdentifier(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length <= MAX_IDENTIFIER_LENGTH &&
+    IDENTIFIER_PATTERN.test(value)
+  )
+}
 
 /**
  * Converts a command path as the CLI framework reports it

@@ -43,6 +43,7 @@ numbers even from users who've never made a choice.
 | `recordHelpFlagUsage`                   | a bare "help was used" event, no command path                    |
 | `recordError`                           | `cli.errors` counter increment by command; no category, no event |
 | `recordFeatureActivated`                | nothing                                                          |
+| `recordCounter`                         | `cli.counter` increment: name and optional label only            |
 | `recordCommand` memory and CPU time     | nothing                                                          |
 | `recordSessionStart` size and startup   | nothing                                                          |
 
@@ -101,6 +102,50 @@ Also adds:
 - `recordError` starts emitting a `cli.error.raised` event: category
   (`ErrorCategory`, e.g. `ErrorCategory.Network`) plus command path. Never
   a message or stack trace — see Tier.OptIn.
+- `recordError(commandPath, category, reason)` also sends the optional
+  `reason` as `cli.error.reason`, on that event and on the `cli.errors`
+  metric. It is a fixed-vocabulary identifier you define in code (e.g.
+  `"no-token"`, `"invalid-url"`), never error text or user input. It must
+  match `^[a-z0-9][a-z0-9._-]*$` and be at most 64 bytes; a reason that
+  doesn't is dropped (the error is still recorded without it), never
+  trimmed or rewritten. The SDK does not scrub it. The server caps the
+  number of distinct reasons per tenant and folds the rest into `other`.
+  The `classify` option of `@getargvio/commander` and `@getargvio/yargs`
+  may return `{ category, reason }` for this. Nothing is sent at
+  `Tier.Anonymous`.
+
+### Vendor counters, at every tier
+
+`recordCounter(name, n, { label })` adds to a product counter of your own
+(e.g. "rules generated, by HTTP verb"). It is sent as the `cli.counter`
+metric with two attributes, `cli.counter.name` and, if given,
+`cli.counter.label`, next to the command-independent resource attributes
+every signal carries (CLI version, OS, architecture, CI). It carries no
+session or install ID, and no command path.
+
+> **Warning: counters are accepted at the anonymous tier.** `recordCounter`
+> sends at every tier, including `Tier.Anonymous` and CI, with no consent
+> choice made. Counter names and labels must be fixed identifiers chosen in
+> code, **never user input, file paths, host names, URLs, tokens or anything
+> derived from them**. The SDK does not scrub them.
+
+| Tier        | What `recordCounter` sends                             |
+| ----------- | ------------------------------------------------------ |
+| `Anonymous` | `cli.counter`: `cli.counter.name`, `cli.counter.label` |
+| `Basic`+    | the same; counters add nothing at a higher tier        |
+
+- `name` and `label` must each match `^[a-z0-9][a-z0-9._-]*$` and be at
+  most 64 bytes. An increment with an invalid name or label is dropped
+  entirely, not trimmed and not sent without its label.
+- `n` must be a positive integer; zero, negative, fractional and
+  non-numeric values are ignored.
+- Increments are summed in memory, so a hot loop is cheap: each export
+  carries one data point per name and label.
+- The server caps the number of distinct names and, per name, distinct
+  labels for each tenant, and folds the rest into `other`. Fixed
+  vocabularies stay well under the caps.
+- A disabled client (`disabled`, `DO_NOT_TRACK`, `ARGVIO_DISABLED`)
+  sends nothing, and `recordCounter` never throws.
 
 ### Tier.Full
 

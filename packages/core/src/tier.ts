@@ -119,3 +119,16 @@ const ERROR_CATEGORY_VALUES: ReadonlySet<string> = new Set(Object.values(ErrorCa
 export function isValidErrorCategory(value: string): value is ErrorCategory {
   return ERROR_CATEGORY_VALUES.has(value)
 }
+
+/**
+ * What a vendor's classifier returns for an error: the {@link ErrorCategory}
+ * plus, optionally, a fixed-vocabulary `reason` that says more precisely
+ * what failed (e.g. `"no-token"`, `"invalid-url"`). The reason must be an
+ * identifier chosen in code (`^[a-z0-9][a-z0-9._-]*$`, at most 64 bytes),
+ * never error text or anything derived from user input; one that doesn't
+ * match is dropped, not rewritten. Sent at `Tier.Basic`+.
+ */
+export interface ErrorClassification {
+  category: ErrorCategory
+  reason?: string
+}
