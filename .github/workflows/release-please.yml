@@ -26,6 +26,7 @@ jobs:
         run: |
           mkdir -p release-outputs
           echo '${{ steps.release.outputs.paths_released }}' > release-outputs/paths_released
+          echo '${{ steps.release.outputs.releases_created }}' > release-outputs/releases_created
 
       - name: Upload release outputs 📤
         uses: actions/upload-artifact@v7

@@ -32,12 +32,14 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: release-outputs
+          path: release-outputs
           run-id: ${{ github.event.workflow_run.id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute matrix 🔎
         id: compute
         run: |
+          releases_created=false
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             if [ -n "${{ inputs.path }}" ]; then
               paths='["${{ inputs.path }}"]'
@@ -45,10 +47,20 @@ jobs:
               paths='["packages/core", "packages/yargs", "packages/commander"]'
             fi
           else
-            paths="$(cat release-outputs/paths_released 2>/dev/null || echo '[]')"
+            if [ ! -f release-outputs/paths_released ]; then
+              echo "::error::release-outputs/paths_released not found in the downloaded artifact"
+              exit 1
+            fi
+            paths="$(cat release-outputs/paths_released)"
+            paths="${paths:-[]}"
+            releases_created="$(cat release-outputs/releases_created 2>/dev/null || echo false)"
           fi
           echo "matrix={\"path\":$paths}" >> "$GITHUB_OUTPUT"
           if [ "$(echo "$paths" | node -e "process.stdin.once('data', d => console.log(JSON.parse(d).length))")" = "0" ]; then
+            if [ "$releases_created" = "true" ]; then
+              echo "::error::Release Please created a release but reported no released paths"
+              exit 1
+            fi
             echo "has-releases=false" >> "$GITHUB_OUTPUT"
           else
             echo "has-releases=true" >> "$GITHUB_OUTPUT"
@@ -100,3 +112,15 @@ jobs:
         run: pnpm publish --filter "./${{ matrix.path }}" --provenance --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  verify-publish:
+    name: Verify releases were published
+    needs: [compute-matrix, publish]
+    if: ${{ always() && needs.compute-matrix.outputs.has-releases == 'true' && needs.publish.result != 'success' }}
+    runs-on: ubuntu-slim
+
+    steps:
+      - name: Fail when releases were not published ❌
+        run: |
+          echo "::error::Releases were created but the publish job result was '${{ needs.publish.result }}'"
+          exit 1
