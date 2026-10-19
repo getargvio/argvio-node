@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/getargvio/argvio-node/compare/commander-v0.3.0...commander-v0.4.0) (2026-10-19)
+
+
+### Features
+
+* let vendors report an error reason and product counters ([0ced24b](https://github.com/getargvio/argvio-node/commit/0ced24bcb79a2b743f59521e17841a2215c27027))
+* let vendors report an error reason and product counters ([d618ce2](https://github.com/getargvio/argvio-node/commit/d618ce298190d792ceee717d484f52858324977f))
+
 ## [0.3.0](https://github.com/getargvio/argvio-node/compare/commander-v0.2.0...commander-v0.3.0) (2026-10-15)
 
 
