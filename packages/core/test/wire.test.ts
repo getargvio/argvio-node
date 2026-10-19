@@ -4,6 +4,12 @@ import { join } from 'node:path'
 
 import { SpanStatusCode } from '@opentelemetry/api'
 import type { Attributes } from '@opentelemetry/api'
+import {
+  AggregationTemporality,
+  InMemoryMetricExporter,
+  MeterProvider,
+  PeriodicExportingMetricReader,
+} from '@opentelemetry/sdk-metrics'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -11,6 +17,9 @@ import {
   AttrCommandName,
   AttrDurationMs,
   AttrErrorMessage,
+  AttrCounterLabel,
+  AttrCounterName,
+  AttrErrorReason,
   AttrErrorType,
   AttrExitCode,
   AttrFlagNames,
@@ -23,12 +32,14 @@ import {
   AttrStartupDurationMs,
   Client,
   ErrorCategory,
+  createClient,
   EventCommandCompleted,
   EventCommandInvoked,
   EventErrorRaised,
   EventFeatureActivated,
   EventHelpViewed,
   EventSessionStarted,
+  MetricCounter,
   Tier,
 } from '../src/index.js'
 import {
@@ -41,6 +52,11 @@ import {
 
 interface LogRecord {
   eventName: string
+  attributes: Attributes
+}
+
+interface MetricAdd {
+  value: number
   attributes: Attributes
 }
 
@@ -61,6 +77,8 @@ function capturingClient(
 ) {
   const logs: LogRecord[] = []
   const spans: SpanRecord[] = []
+  const errorCounts: MetricAdd[] = []
+  const counterAdds: MetricAdd[] = []
   const client = new Client({
     cliName: 'testcli',
     installIdPath,
@@ -70,6 +88,12 @@ function capturingClient(
     tier,
     queueSize: 100,
     shutdownTimeoutMs: 1000,
+    errorEventsCounter: {
+      add: (value: number, attributes: Attributes) => errorCounts.push({ value, attributes }),
+    },
+    productCounter: {
+      add: (value: number, attributes: Attributes) => counterAdds.push({ value, attributes }),
+    },
     logger: {
       emit: (rec: { eventName?: string; attributes?: Attributes }) => {
         logs.push({ eventName: rec.eventName ?? '', attributes: rec.attributes ?? {} })
@@ -91,7 +115,7 @@ function capturingClient(
     },
   } as unknown as ConstructorParameters<typeof Client>[0])
   const event = (name: string) => logs.find((l) => l.eventName === name)
-  return { client, logs, spans, event }
+  return { client, logs, spans, errorCounts, counterAdds, event }
 }
 
 describe('wire format', () => {
@@ -500,5 +524,266 @@ describe('loadOrCreateInstallId', () => {
 
     expect(loadOrCreateInstallId(join(path, 'under-a-file'))).toBe('')
     expect(loadOrCreateInstallId(undefined)).toBe('')
+  })
+})
+
+describe('error reason', () => {
+  it('is sent at Tier.Basic+ on the event and the cli.errors metric', async () => {
+    for (const tier of [Tier.Basic, Tier.Full, Tier.OptIn]) {
+      const { client, errorCounts, event } = capturingClient(tier)
+      client.recordError('testcli sub', ErrorCategory.Auth, 'no-token')
+      await client.flush(500)
+
+      expect(AttrErrorReason).toBe('cli.error.reason')
+      expect(event(EventErrorRaised)?.attributes[AttrErrorReason], String(tier)).toBe('no-token')
+      expect(event(EventErrorRaised)?.attributes[AttrErrorType]).toBe('auth')
+      expect(errorCounts).toHaveLength(1)
+      expect(errorCounts[0]?.attributes[AttrErrorReason]).toBe('no-token')
+    }
+  })
+
+  it('is not sent at Tier.Anonymous, where the category is not either', async () => {
+    const { client, errorCounts, event } = capturingClient(Tier.Anonymous)
+    client.recordError('testcli sub', ErrorCategory.Auth, 'no-token')
+    await client.flush(500)
+
+    expect(errorCounts).toHaveLength(1)
+    expect(errorCounts[0]?.attributes).not.toHaveProperty(AttrErrorReason)
+    expect(event(EventErrorRaised)).toBeUndefined()
+  })
+
+  it('is omitted when absent, and the error is recorded as before', async () => {
+    const { client, errorCounts, event } = capturingClient(Tier.Basic)
+    client.recordError('testcli sub', ErrorCategory.Network)
+    await client.flush(500)
+
+    expect(event(EventErrorRaised)?.attributes).not.toHaveProperty(AttrErrorReason)
+    expect(errorCounts[0]?.attributes).not.toHaveProperty(AttrErrorReason)
+  })
+
+  it('drops a reason that is not a valid identifier, but still records the error', async () => {
+    const invalid = [
+      '',
+      'No-Token',
+      'no token',
+      'failed to read config file',
+      '-leading-dash',
+      '.leading-dot',
+      '_leading-underscore',
+      'trailing-newline\n',
+      '/etc/passwd',
+      'caf\u00e9',
+      'x'.repeat(65),
+    ]
+    for (const reason of invalid) {
+      const { client, errorCounts, event } = capturingClient(Tier.Basic)
+      client.recordError('testcli sub', ErrorCategory.Internal, reason)
+      await client.flush(500)
+
+      expect(event(EventErrorRaised)?.attributes, JSON.stringify(reason)).not.toHaveProperty(
+        AttrErrorReason,
+      )
+      expect(event(EventErrorRaised)?.attributes[AttrErrorType]).toBe('internal')
+      expect(errorCounts[0]?.attributes).not.toHaveProperty(AttrErrorReason)
+    }
+  })
+
+  it('accepts the whole allowed character set up to 64 characters', async () => {
+    for (const reason of ['a', '0', 'a.b_c-d', 'x'.repeat(64)]) {
+      const { client, event } = capturingClient(Tier.Basic)
+      client.recordError('testcli sub', ErrorCategory.Internal, reason)
+      await client.flush(500)
+      expect(event(EventErrorRaised)?.attributes[AttrErrorReason]).toBe(reason)
+    }
+  })
+
+  it('is ignored if it is not a string', async () => {
+    const { client, event } = capturingClient(Tier.Basic)
+    client.recordError('testcli sub', ErrorCategory.Internal, 42 as unknown as string)
+    await client.flush(500)
+    expect(event(EventErrorRaised)?.attributes).not.toHaveProperty(AttrErrorReason)
+  })
+})
+
+describe('recordCounter', () => {
+  it('sends the name and label under the server attribute names, at every tier', async () => {
+    for (const tier of [Tier.Anonymous, Tier.Basic, Tier.Full, Tier.OptIn]) {
+      const { client, counterAdds } = capturingClient(tier)
+      client.recordCounter('rules.generated', 3, { label: 'get' })
+      client.recordCounter('scan.completed', 1)
+      await client.flush(500)
+
+      expect(AttrCounterName).toBe('cli.counter.name')
+      expect(AttrCounterLabel).toBe('cli.counter.label')
+      expect(MetricCounter).toBe('cli.counter')
+      expect(counterAdds, String(tier)).toHaveLength(2)
+      expect(counterAdds[0]?.value).toBe(3)
+      expect(counterAdds[0]?.attributes[AttrCounterName]).toBe('rules.generated')
+      expect(counterAdds[0]?.attributes[AttrCounterLabel]).toBe('get')
+      expect(counterAdds[1]?.attributes[AttrCounterName]).toBe('scan.completed')
+      expect(counterAdds[1]?.attributes).not.toHaveProperty(AttrCounterLabel)
+    }
+  })
+
+  it('carries no identifiers at Tier.Anonymous', async () => {
+    const { client, counterAdds } = capturingClient(Tier.Anonymous)
+    client.recordSessionStart()
+    client.recordCounter('scan.completed', 1)
+    await client.flush(500)
+
+    expect(Object.keys(counterAdds[0]?.attributes ?? {}).sort()).toEqual(
+      ['cli.analytics.tier', AttrCounterName].sort(),
+    )
+    expect(client.stats().belowTierDropped).toBe(0)
+  })
+
+  it('drops an invalid name, not trimming or rewriting it', async () => {
+    const invalid = [
+      '',
+      'Scan',
+      'scan completed',
+      '-scan',
+      '.scan',
+      '_scan',
+      'scan/done',
+      'https://example.com',
+      '/home/user/project',
+      'scan\n',
+      'caf\u00e9',
+      'x'.repeat(65),
+    ]
+    const { client, counterAdds } = capturingClient(Tier.Anonymous)
+    for (const name of invalid) client.recordCounter(name, 1)
+    client.recordCounter(42 as unknown as string, 1)
+    client.recordCounter(undefined as unknown as string, 1)
+    await client.flush(500)
+    expect(counterAdds).toHaveLength(0)
+  })
+
+  it('drops the whole increment for an invalid label rather than sending it unlabeled', async () => {
+    const { client, counterAdds } = capturingClient(Tier.Anonymous)
+    for (const label of ['', 'Get', 'a b', '-x', 'user@example.com', 'x'.repeat(65)]) {
+      client.recordCounter('rules.generated', 1, { label })
+    }
+    client.recordCounter('rules.generated', 1, { label: 7 as unknown as string })
+    await client.flush(500)
+    expect(counterAdds).toHaveLength(0)
+  })
+
+  it('accepts names and labels of exactly 64 characters', async () => {
+    const { client, counterAdds } = capturingClient(Tier.Anonymous)
+    client.recordCounter('a'.repeat(64), 1, { label: '9'.repeat(64) })
+    client.recordCounter('a.b_c-d', 1, { label: '0' })
+    await client.flush(500)
+    expect(counterAdds).toHaveLength(2)
+  })
+
+  it('ignores a non-positive or non-integer n', async () => {
+    const { client, counterAdds } = capturingClient(Tier.Anonymous)
+    for (const n of [0, -1, -0, 0.5, 1.5, NaN, Infinity, -Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+      client.recordCounter('scan.completed', n)
+    }
+    client.recordCounter('scan.completed', '3' as unknown as number)
+    client.recordCounter('scan.completed', null as unknown as number)
+    client.recordCounter('scan.completed', undefined as unknown as number)
+    await client.flush(500)
+    expect(counterAdds).toHaveLength(0)
+
+    client.recordCounter('scan.completed', 1)
+    client.recordCounter('scan.completed', Number.MAX_SAFE_INTEGER)
+    await client.flush(500)
+    expect(counterAdds.map((a) => a.value)).toEqual([1, Number.MAX_SAFE_INTEGER])
+  })
+
+  it('is a safe no-op on a disabled client', async () => {
+    const client = createClient('key', 'cli', '1.0.0', { disabled: true })
+    expect(() => {
+      client.recordCounter('scan.completed', 1, { label: 'x' })
+      client.recordCounter('Bad Name', -1)
+    }).not.toThrow()
+    await client.flush(100)
+    expect(client.stats()).toEqual({
+      queueOverflowDropped: 0,
+      belowTierDropped: 0,
+      recoveredErrors: 0,
+    })
+  })
+
+  it('is a no-op after shutdown', async () => {
+    const { client, counterAdds } = capturingClient(Tier.Anonymous)
+    await client.shutdown(100)
+    client.recordCounter('scan.completed', 1)
+    expect(counterAdds).toHaveLength(0)
+  })
+
+  it('never throws into the host CLI, even if the exporter pipeline does', () => {
+    const client = new Client({
+      cliName: 'testcli',
+      disabled: false,
+      initError: null,
+      tier: Tier.Anonymous,
+      queueSize: 10,
+      shutdownTimeoutMs: 100,
+      productCounter: {
+        add: () => {
+          throw new Error('boom')
+        },
+      },
+    } as unknown as ConstructorParameters<typeof Client>[0])
+    expect(() => client.recordCounter('scan.completed', 1)).not.toThrow()
+    expect(client.stats().recoveredErrors).toBe(1)
+  })
+
+  it('does not throw when options is null or malformed', () => {
+    const { client } = capturingClient(Tier.Anonymous)
+    expect(() => {
+      client.recordCounter('scan.completed', 1, null as unknown as { label?: string })
+    }).not.toThrow()
+  })
+
+  it('sums increments in memory, sending one data point per name and label', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE)
+    const meterProvider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 3_600_000 })],
+    })
+    const client = new Client({
+      cliName: 'testcli',
+      disabled: false,
+      initError: null,
+      tier: Tier.Anonymous,
+      queueSize: 10,
+      shutdownTimeoutMs: 100,
+      productCounter: meterProvider.getMeter('test').createCounter(MetricCounter, { unit: '1' }),
+    } as unknown as ConstructorParameters<typeof Client>[0])
+
+    // Far more calls than the queue holds: none may be dropped.
+    for (let i = 0; i < 1000; i++) client.recordCounter('rules.generated', 1, { label: 'get' })
+    client.recordCounter('rules.generated', 5, { label: 'post' })
+    client.recordCounter('rules.generated', 2)
+    client.recordCounter('rules.generated', 3, { label: 'get' })
+    client.recordCounter('scan.completed', 4)
+
+    await meterProvider.forceFlush()
+    const exports = exporter.getMetrics()
+    expect(exports).toHaveLength(1)
+    const metrics = exports.flatMap((rm) => rm.scopeMetrics.flatMap((scope) => scope.metrics))
+    expect(metrics).toHaveLength(1)
+    expect(metrics[0]?.descriptor.name).toBe('cli.counter')
+    const points = (metrics[0]?.dataPoints ?? []).map((p) => ({
+      name: p.attributes[AttrCounterName],
+      label: p.attributes[AttrCounterLabel],
+      value: p.value,
+    }))
+    expect(points).toHaveLength(4)
+    expect(points).toEqual(
+      expect.arrayContaining([
+        { name: 'rules.generated', label: 'get', value: 1003 },
+        { name: 'rules.generated', label: 'post', value: 5 },
+        { name: 'rules.generated', label: undefined, value: 2 },
+        { name: 'scan.completed', label: undefined, value: 4 },
+      ]),
+    )
+    expect(client.stats().queueOverflowDropped).toBe(0)
+    await meterProvider.shutdown()
   })
 })

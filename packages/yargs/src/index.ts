@@ -2,14 +2,21 @@ import type { Argv, Arguments } from 'yargs'
 
 import type { Client, ClientOptions } from '@getargvio/argvio'
 import { createClient, ErrorCategory } from '@getargvio/argvio'
-import type { ErrorCategory as ErrorCategoryType } from '@getargvio/argvio'
+import type { ErrorCategory as ErrorCategoryType, ErrorClassification } from '@getargvio/argvio'
 
 const INVOCATION_MARKER = Symbol('argvio.recordedInvocation')
 
 /** Configures {@link instrumentYargs}. */
 export interface YargsHookOptions {
-  /** Maps a caught error to an {@link ErrorCategoryType}. Without it, every error is recorded as `ErrorCategory.Unknown`. */
-  classify?: (err: Error) => ErrorCategoryType
+  /**
+   * Maps a caught error to an {@link ErrorCategoryType}, or to
+   * `{ category, reason }` to also report a fixed-vocabulary reason (e.g.
+   * `"no-token"`). The reason must be an identifier chosen in code
+   * (`^[a-z0-9][a-z0-9._-]*$`, at most 64 bytes), never error text or user
+   * input; one that doesn't match is dropped. Without `classify`, every
+   * error is recorded as `ErrorCategory.Unknown` with no reason.
+   */
+  classify?: (err: Error) => ErrorCategoryType | ErrorClassification
   /** Skip the best-effort help-flag capture (see docs/yargs-integration.md for why it's best-effort). */
   captureHelp?: boolean
   /** Skip the `middleware`-based command-invocation capture. */
@@ -175,10 +182,10 @@ export function instrumentYargs(
         })
         .catch((err: unknown) => {
           recordCommand(1)
-          client.recordError(
-            lastCommandPath,
-            classify(err instanceof Error ? err : new Error(String(err))),
-          )
+          const classified = classify(err instanceof Error ? err : new Error(String(err)))
+          const { category, reason } =
+            typeof classified === 'string' ? { category: classified } : classified
+          client.recordError(lastCommandPath, category, reason)
           throw err
         })
     } as ParseFn

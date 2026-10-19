@@ -50,17 +50,43 @@ try {
 For yargs or commander, use the dedicated integration packages instead
 of wiring this up by hand.
 
+## Error reasons and counters
+
+`recordError` takes an optional third argument, a `reason` from a fixed
+vocabulary you define (sent at `Basic`+ as `cli.error.reason`):
+
+```ts
+client.recordError('mycli run', 'auth', 'no-token')
+```
+
+`recordCounter` counts something specific to your product. Increments are
+summed in memory and sent as one data point per name and label:
+
+```ts
+client.recordCounter('rules.generated', 1, { label: 'get' })
+```
+
+> **Warning: counters are accepted at the anonymous tier.** They are sent
+> at every tier, including `Anonymous` and in CI, with no consent choice
+> made. Names and labels must be fixed identifiers chosen in code, **never
+> user input, file paths, host names, URLs, tokens or anything derived
+> from them**. The SDK does not scrub them.
+
+Reasons, counter names and counter labels must match
+`^[a-z0-9][a-z0-9._-]*$` and be at most 64 bytes; anything else is
+dropped, not scrubbed. A counter increment `n` must be a positive integer.
+
 ## Consent tiers
 
 Every signal this SDK emits carries a `cli.analytics.tier` attribute
 and is shaped by the tier the current session resolved to:
 
-| Tier                  | Adds                                                           |
-| --------------------- | -------------------------------------------------------------- |
-| `Anonymous` (default) | aggregate invocation/session/exit counts only, no identifiers  |
-| `Basic`               | command path, flag names, session and install IDs, error types |
-| `Full`                | reserved: nothing beyond `Basic` in this SDK                   |
-| `OptIn`               | raw error messages and stack traces, via `client.optIn()` only |
+| Tier                  | Adds                                                                           |
+| --------------------- | ------------------------------------------------------------------------------ |
+| `Anonymous` (default) | aggregate invocation/session/exit counts only, no identifiers; vendor counters |
+| `Basic`               | command path, flag names, session and install IDs, error types and reasons     |
+| `Full`                | reserved: nothing beyond `Basic` in this SDK                                   |
+| `OptIn`               | raw error messages and stack traces, via `client.optIn()` only                 |
 
 The SDK enforces this client-side — it is structurally difficult to
 call a lower-tier method with a higher-tier field (e.g. `recordError`

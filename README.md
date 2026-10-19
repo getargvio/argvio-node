@@ -60,12 +60,12 @@ own code, not the CLI framework, decides the real process exit code.
 
 Every signal carries a `cli.analytics.tier` attribute, enforced client-side:
 
-| Tier                  | Adds                                                           |
-| --------------------- | -------------------------------------------------------------- |
-| `Anonymous` (default) | aggregate invocation/session/exit counts only, no identifiers  |
-| `Basic`               | command path, flag names, session and install IDs, error types |
-| `Full`                | reserved: nothing beyond `Basic` in this SDK                   |
-| `OptIn`               | raw error messages and stack traces, via `client.optIn()` only |
+| Tier                  | Adds                                                                       |
+| --------------------- | -------------------------------------------------------------------------- |
+| `Anonymous` (default) | aggregate invocation/session/exit counts only, no identifiers              |
+| `Basic`               | command path, flag names, session and install IDs, error types and reasons |
+| `Full`                | reserved: nothing beyond `Basic` in this SDK                               |
+| `OptIn`               | raw error messages and stack traces, via `client.optIn()` only             |
 
 See [`packages/core/docs/consent.md`](packages/core/docs/consent.md) for
 the full model.

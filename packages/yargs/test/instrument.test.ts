@@ -73,7 +73,7 @@ describe('instrumentYargs', () => {
     })
 
     await expect(y.parseAsync(['boom'])).rejects.toThrow('kaboom')
-    expect(recordError).toHaveBeenCalledWith('testcli boom', ErrorCategory.Internal)
+    expect(recordError).toHaveBeenCalledWith('testcli boom', ErrorCategory.Internal, undefined)
     expect(recordCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         path: 'testcli boom',
@@ -81,6 +81,18 @@ describe('instrumentYargs', () => {
         durationMs: expect.any(Number),
       }),
     )
+  })
+
+  it('passes the reason when classify returns a category and a reason', async () => {
+    const client = makeClient()
+    const recordError = vi.spyOn(client, 'recordError')
+
+    const instrumented = instrumentYargs(buildY(), client, {
+      classify: () => ({ category: ErrorCategory.Auth, reason: 'no-token' }),
+    })
+
+    await expect(instrumented.parseAsync(['boom'])).rejects.toThrow('kaboom')
+    expect(recordError).toHaveBeenCalledWith('testcli boom', ErrorCategory.Auth, 'no-token')
   })
 
   it('records an asynchronously-rejected handler error and rethrows it', async () => {
@@ -93,7 +105,7 @@ describe('instrumentYargs', () => {
     })
 
     await expect(y.parseAsync(['boom-async'])).rejects.toThrow('kaboom-async')
-    expect(recordError).toHaveBeenCalledWith('testcli boom-async', ErrorCategory.Network)
+    expect(recordError).toHaveBeenCalledWith('testcli boom-async', ErrorCategory.Network, undefined)
     expect(recordCommand).toHaveBeenCalledWith(
       expect.objectContaining({
         path: 'testcli boom-async',

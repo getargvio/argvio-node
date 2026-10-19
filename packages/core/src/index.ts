@@ -1,5 +1,5 @@
 export { Client, OptInScope, createClient } from './client.js'
-export type { CommandResult } from './client.js'
+export type { CommandResult, CounterOptions } from './client.js'
 
 export type { ClientOptions, Transport } from './options.js'
 export {
@@ -22,6 +22,7 @@ export {
   ErrorCategory,
   isValidErrorCategory,
 } from './tier.js'
+export type { ErrorClassification } from './tier.js'
 
 export type { ConsentProvider } from './consent.js'
 export { StaticProvider, DisabledProvider, chainProviders } from './consent.js'
@@ -48,6 +49,9 @@ export {
   AttrInstallMethod,
   AttrActivationFeature,
   AttrErrorType,
+  AttrErrorReason,
+  AttrCounterName,
+  AttrCounterLabel,
   AttrErrorMessage,
   AttrErrorStack,
   EventSessionStarted,
@@ -60,6 +64,7 @@ export {
   MetricCommandInvocations,
   MetricCommandDuration,
   MetricErrors,
+  MetricCounter,
 } from './taxonomy.js'
 export {
   ResourceAttrCLIVersion,
