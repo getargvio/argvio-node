@@ -97,7 +97,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Build TypeScript 🔨
-        run: pnpm --filter "./${{ matrix.path }}" run build
+        run: pnpm --filter "{./${{ matrix.path }}}..." run build
 
       - name: Publish to npm 📦
         run: pnpm publish --filter "./${{ matrix.path }}" --provenance --no-git-checks
