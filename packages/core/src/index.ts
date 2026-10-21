@@ -1,5 +1,5 @@
 export { Client, OptInScope, createClient } from './client.js'
-export type { CommandResult, CounterOptions } from './client.js'
+export type { CommandResult, CounterOptions, DurationOptions } from './client.js'
 
 export type { ClientOptions, Transport } from './options.js'
 export {
@@ -52,6 +52,8 @@ export {
   AttrErrorReason,
   AttrCounterName,
   AttrCounterLabel,
+  AttrMeasureName,
+  AttrMeasureLabel,
   AttrErrorMessage,
   AttrErrorStack,
   EventSessionStarted,
@@ -65,6 +67,8 @@ export {
   MetricCommandDuration,
   MetricErrors,
   MetricCounter,
+  MetricMeasure,
+  MEASURE_BUCKET_BOUNDARIES_MS,
 } from './taxonomy.js'
 export {
   ResourceAttrCLIVersion,
