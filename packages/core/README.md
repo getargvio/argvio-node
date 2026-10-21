@@ -50,7 +50,7 @@ try {
 For yargs or commander, use the dedicated integration packages instead
 of wiring this up by hand.
 
-## Error reasons and counters
+## Error reasons, counters and timings
 
 `recordError` takes an optional third argument, a `reason` from a fixed
 vocabulary you define (sent at `Basic`+ as `cli.error.reason`):
@@ -66,15 +66,26 @@ summed in memory and sent as one data point per name and label:
 client.recordCounter('rules.generated', 1, { label: 'get' })
 ```
 
-> **Warning: counters are accepted at the anonymous tier.** They are sent
-> at every tier, including `Anonymous` and in CI, with no consent choice
-> made. Names and labels must be fixed identifiers chosen in code, **never
-> user input, file paths, host names, URLs, tokens or anything derived
-> from them**. The SDK does not scrub them.
+`recordDuration` reports how long something took, in milliseconds. Values
+are aggregated in memory into a `cli.measure` histogram (buckets at 1, 5,
+10, 50, 100, 500, 1000, 5000, 10000, 60000 and 300000 ms):
 
-Reasons, counter names and counter labels must match
+```ts
+const start = performance.now()
+await fetchRules()
+client.recordDuration('rules.fetch', performance.now() - start, { label: 'get' })
+```
+
+> **Warning: counters and timings are accepted at the anonymous tier.**
+> They are sent at every tier, including `Anonymous` and in CI, with no
+> consent choice made. Names and labels must be fixed identifiers chosen in
+> code, **never user input, file paths, host names, URLs, tokens or
+> anything derived from them**. The SDK does not scrub them.
+
+Reasons, counter and timing names, and counter and timing labels must match
 `^[a-z0-9][a-z0-9._-]*$` and be at most 64 bytes; anything else is
-dropped, not scrubbed. A counter increment `n` must be a positive integer.
+dropped, not scrubbed. A counter increment `n` must be a positive integer,
+and a duration `ms` a finite number greater than zero.
 
 ## Consent tiers
 

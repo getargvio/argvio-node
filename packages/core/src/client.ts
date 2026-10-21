@@ -29,6 +29,8 @@ import {
   AttrHelpFlag,
   AttrInstallId,
   AttrInstallMethod,
+  AttrMeasureLabel,
+  AttrMeasureName,
   AttrPeakRssBytes,
   AttrCpuTimeMs,
   AttrBinarySizeBytes,
@@ -44,7 +46,9 @@ import {
   MetricCommandInvocations,
   MetricCounter,
   MetricErrors,
+  MetricMeasure,
   MAX_ACTIVATION_FEATURE_LENGTH,
+  MEASURE_BUCKET_BOUNDARIES_MS,
   SpanCommandPrefix,
   commandName,
   isValidIdentifier,
@@ -160,6 +164,15 @@ export interface CounterOptions {
   label?: string
 }
 
+/** Options for {@link Client.recordDuration}. */
+export interface DurationOptions {
+  /**
+   * Splits the timing into series (e.g. a tool or HTTP verb). A fixed
+   * identifier chosen in code, subject to the same rules as the timing name.
+   */
+  label?: string
+}
+
 /** One completed command, for {@link Client.recordCommand}. */
 export interface CommandResult {
   /** The full command path, as for {@link Client.recordCommandInvocation}. */
@@ -192,6 +205,7 @@ interface ClientParams {
   invocationsCounter?: Counter
   errorEventsCounter?: Counter
   productCounter?: Counter
+  measureHist?: Histogram
 }
 
 /**
@@ -230,6 +244,7 @@ export class Client {
   private readonly invocationsCounter: Counter | undefined
   private readonly errorEventsCounter: Counter | undefined
   private readonly productCounter: Counter | undefined
+  private readonly measureHist: Histogram | undefined
 
   /** @internal use {@link createClient} */
   constructor(params: ClientParams) {
@@ -246,6 +261,7 @@ export class Client {
     this.invocationsCounter = params.invocationsCounter
     this.errorEventsCounter = params.errorEventsCounter
     this.productCounter = params.productCounter
+    this.measureHist = params.measureHist
     this.cliName = params.cliName ?? ''
     this.installIdPath = params.installIdPath
     this.installMethod = params.installMethod
@@ -578,6 +594,47 @@ export class Client {
   }
 
   /**
+   * Records how long something took, in milliseconds, for a vendor-defined
+   * timing. It is sent as the `cli.measure` histogram with the
+   * `cli.measure.name` and, if given, `cli.measure.label` attributes.
+   * Values are aggregated in memory into fixed buckets (1, 5, 10, 50, 100,
+   * 500, 1000, 5000, 10000, 60000 and 300000 ms): one data point per name
+   * and label is sent at each export, however often this is called, so it
+   * is cheap in a hot loop.
+   *
+   * **Timings are accepted at the anonymous tier.** They are sent at every
+   * tier, including `Tier.Anonymous` and in CI, even when the user has made
+   * no consent choice. Nothing identifies the user, but `name` and `label`
+   * are strings you choose, so a mistake here puts text into anonymous
+   * data. They must be fixed identifiers chosen in code, **never user
+   * input, file paths, host names, URLs, tokens or anything derived from
+   * them**. This SDK does not scrub them.
+   *
+   * `name` and `label` must match `^[a-z0-9][a-z0-9._-]*$` and be at most
+   * 64 bytes. If either does not, nothing is recorded: the timing is
+   * dropped, not trimmed or sent without its label. `ms` must be a finite
+   * number greater than zero; anything else is ignored. The server caps the
+   * number of distinct names and labels per tenant and folds the rest into
+   * `other`.
+   *
+   * Never throws, and does nothing on a disabled Client.
+   */
+  recordDuration(name: string, ms: number, options: DurationOptions = {}): void {
+    safeRun(() => {
+      if (!this.gate(Tier.Anonymous)) return
+      if (!isValidIdentifier(name)) return
+      if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return
+      const label = options?.label
+      if (label !== undefined && !isValidIdentifier(label)) return
+      const attrs: Attributes = { ...this.tierAttr(), [AttrMeasureName]: name }
+      if (label !== undefined) attrs[AttrMeasureLabel] = label
+      // Straight into the OTel histogram, not the job queue, for the same
+      // reason as recordCounter: it aggregates per attribute set in memory.
+      this.measureHist?.record(ms, attrs)
+    }, this.counters)
+  }
+
+  /**
    * Returns an {@link OptInScope} if, and only if, this Client's resolved
    * consent tier is `Tier.OptIn`; otherwise returns `undefined`. There is
    * no other way to reach raw error detail (message, stack trace)
@@ -780,6 +837,11 @@ export function createClient(
       productCounter: meter.createCounter(MetricCounter, {
         unit: '1',
         description: 'Vendor-defined counters, by fixed name and optional label.',
+      }),
+      measureHist: meter.createHistogram(MetricMeasure, {
+        unit: 'ms',
+        description: 'Vendor-defined timings, by fixed name and optional label.',
+        advice: { explicitBucketBoundaries: [...MEASURE_BUCKET_BOUNDARIES_MS] },
       }),
     })
   } catch (err) {

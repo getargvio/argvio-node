@@ -19,6 +19,8 @@ import {
   AttrErrorMessage,
   AttrCounterLabel,
   AttrCounterName,
+  AttrMeasureLabel,
+  AttrMeasureName,
   AttrErrorReason,
   AttrErrorType,
   AttrExitCode,
@@ -39,7 +41,9 @@ import {
   EventFeatureActivated,
   EventHelpViewed,
   EventSessionStarted,
+  MEASURE_BUCKET_BOUNDARIES_MS,
   MetricCounter,
+  MetricMeasure,
   Tier,
 } from '../src/index.js'
 import {
@@ -79,6 +83,7 @@ function capturingClient(
   const spans: SpanRecord[] = []
   const errorCounts: MetricAdd[] = []
   const counterAdds: MetricAdd[] = []
+  const measureRecords: MetricAdd[] = []
   const client = new Client({
     cliName: 'testcli',
     installIdPath,
@@ -93,6 +98,9 @@ function capturingClient(
     },
     productCounter: {
       add: (value: number, attributes: Attributes) => counterAdds.push({ value, attributes }),
+    },
+    measureHist: {
+      record: (value: number, attributes: Attributes) => measureRecords.push({ value, attributes }),
     },
     logger: {
       emit: (rec: { eventName?: string; attributes?: Attributes }) => {
@@ -115,7 +123,7 @@ function capturingClient(
     },
   } as unknown as ConstructorParameters<typeof Client>[0])
   const event = (name: string) => logs.find((l) => l.eventName === name)
-  return { client, logs, spans, errorCounts, counterAdds, event }
+  return { client, logs, spans, errorCounts, counterAdds, measureRecords, event }
 }
 
 describe('wire format', () => {
@@ -783,6 +791,199 @@ describe('recordCounter', () => {
         { name: 'scan.completed', label: undefined, value: 4 },
       ]),
     )
+    expect(client.stats().queueOverflowDropped).toBe(0)
+    await meterProvider.shutdown()
+  })
+})
+
+describe('recordDuration', () => {
+  it('sends the name and label under the server attribute names, at every tier', async () => {
+    for (const tier of [Tier.Anonymous, Tier.Basic, Tier.Full, Tier.OptIn]) {
+      const { client, measureRecords } = capturingClient(tier)
+      client.recordDuration('rules.fetch', 120, { label: 'get' })
+      client.recordDuration('scan.completed', 1.5)
+      await client.flush(500)
+
+      expect(AttrMeasureName).toBe('cli.measure.name')
+      expect(AttrMeasureLabel).toBe('cli.measure.label')
+      expect(MetricMeasure).toBe('cli.measure')
+      expect(measureRecords, String(tier)).toHaveLength(2)
+      expect(measureRecords[0]?.value).toBe(120)
+      expect(measureRecords[0]?.attributes[AttrMeasureName]).toBe('rules.fetch')
+      expect(measureRecords[0]?.attributes[AttrMeasureLabel]).toBe('get')
+      expect(measureRecords[1]?.value).toBe(1.5)
+      expect(measureRecords[1]?.attributes[AttrMeasureName]).toBe('scan.completed')
+      expect(measureRecords[1]?.attributes).not.toHaveProperty(AttrMeasureLabel)
+    }
+  })
+
+  it('carries no identifiers at Tier.Anonymous', async () => {
+    const { client, measureRecords } = capturingClient(Tier.Anonymous)
+    client.recordSessionStart()
+    client.recordDuration('scan.completed', 10)
+    await client.flush(500)
+
+    expect(Object.keys(measureRecords[0]?.attributes ?? {}).sort()).toEqual(
+      ['cli.analytics.tier', AttrMeasureName].sort(),
+    )
+    expect(client.stats().belowTierDropped).toBe(0)
+  })
+
+  it('drops an invalid name, not trimming or rewriting it', async () => {
+    const invalid = [
+      '',
+      'Scan',
+      'scan completed',
+      '-scan',
+      '.scan',
+      '_scan',
+      'scan/done',
+      'https://example.com',
+      '/home/user/project',
+      'scan\n',
+      'café',
+      'x'.repeat(65),
+    ]
+    const { client, measureRecords } = capturingClient(Tier.Anonymous)
+    for (const name of invalid) client.recordDuration(name, 10)
+    client.recordDuration(42 as unknown as string, 10)
+    client.recordDuration(undefined as unknown as string, 10)
+    await client.flush(500)
+    expect(measureRecords).toHaveLength(0)
+  })
+
+  it('drops the whole timing for an invalid label rather than sending it unlabeled', async () => {
+    const { client, measureRecords } = capturingClient(Tier.Anonymous)
+    for (const label of ['', 'Get', 'a b', '-x', 'user@example.com', 'x'.repeat(65)]) {
+      client.recordDuration('rules.fetch', 10, { label })
+    }
+    client.recordDuration('rules.fetch', 10, { label: 7 as unknown as string })
+    await client.flush(500)
+    expect(measureRecords).toHaveLength(0)
+  })
+
+  it('accepts names and labels of exactly 64 characters', async () => {
+    const { client, measureRecords } = capturingClient(Tier.Anonymous)
+    client.recordDuration('a'.repeat(64), 10, { label: '9'.repeat(64) })
+    client.recordDuration('a.b_c-d', 10, { label: '0' })
+    await client.flush(500)
+    expect(measureRecords).toHaveLength(2)
+  })
+
+  it('ignores a non-positive or non-finite duration', async () => {
+    const { client, measureRecords } = capturingClient(Tier.Anonymous)
+    for (const ms of [0, -1, -0, -0.5, NaN, Infinity, -Infinity]) {
+      client.recordDuration('scan.completed', ms)
+    }
+    client.recordDuration('scan.completed', '3' as unknown as number)
+    client.recordDuration('scan.completed', null as unknown as number)
+    client.recordDuration('scan.completed', undefined as unknown as number)
+    await client.flush(500)
+    expect(measureRecords).toHaveLength(0)
+
+    client.recordDuration('scan.completed', 0.25)
+    client.recordDuration('scan.completed', 300_000)
+    await client.flush(500)
+    expect(measureRecords.map((r) => r.value)).toEqual([0.25, 300_000])
+  })
+
+  it('is a safe no-op on a disabled client', async () => {
+    const client = createClient('key', 'cli', '1.0.0', { disabled: true })
+    expect(() => {
+      client.recordDuration('scan.completed', 10, { label: 'x' })
+      client.recordDuration('Bad Name', -1)
+    }).not.toThrow()
+    await client.flush(100)
+    expect(client.stats()).toEqual({
+      queueOverflowDropped: 0,
+      belowTierDropped: 0,
+      recoveredErrors: 0,
+    })
+  })
+
+  it('is a no-op after shutdown', async () => {
+    const { client, measureRecords } = capturingClient(Tier.Anonymous)
+    await client.shutdown(100)
+    client.recordDuration('scan.completed', 10)
+    expect(measureRecords).toHaveLength(0)
+  })
+
+  it('never throws into the host CLI, even if the exporter pipeline does', () => {
+    const client = new Client({
+      cliName: 'testcli',
+      disabled: false,
+      initError: null,
+      tier: Tier.Anonymous,
+      queueSize: 10,
+      shutdownTimeoutMs: 100,
+      measureHist: {
+        record: () => {
+          throw new Error('boom')
+        },
+      },
+    } as unknown as ConstructorParameters<typeof Client>[0])
+    expect(() => client.recordDuration('scan.completed', 10)).not.toThrow()
+    expect(client.stats().recoveredErrors).toBe(1)
+  })
+
+  it('does not throw when options is null or malformed', () => {
+    const { client } = capturingClient(Tier.Anonymous)
+    expect(() => {
+      client.recordDuration('scan.completed', 10, null as unknown as { label?: string })
+    }).not.toThrow()
+  })
+
+  it('reaches the metric pipeline as a cli.measure histogram in ms with the Go buckets', async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE)
+    const meterProvider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 3_600_000 })],
+    })
+    const client = new Client({
+      cliName: 'testcli',
+      disabled: false,
+      initError: null,
+      tier: Tier.Anonymous,
+      queueSize: 10,
+      shutdownTimeoutMs: 100,
+      measureHist: meterProvider.getMeter('test').createHistogram(MetricMeasure, {
+        unit: 'ms',
+        advice: { explicitBucketBoundaries: [...MEASURE_BUCKET_BOUNDARIES_MS] },
+      }),
+    } as unknown as ConstructorParameters<typeof Client>[0])
+
+    expect(MEASURE_BUCKET_BOUNDARIES_MS).toEqual([
+      1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 60000, 300000,
+    ])
+    // Far more calls than the queue holds: none may be dropped.
+    for (let i = 0; i < 1000; i++) client.recordDuration('rules.fetch', 7, { label: 'get' })
+    client.recordDuration('rules.fetch', 200, { label: 'get' })
+    client.recordDuration('rules.fetch', 3, { label: 'post' })
+    client.recordDuration('scan.completed', 400_000)
+
+    await meterProvider.forceFlush()
+    const exports = exporter.getMetrics()
+    expect(exports).toHaveLength(1)
+    const metrics = exports.flatMap((rm) => rm.scopeMetrics.flatMap((scope) => scope.metrics))
+    expect(metrics).toHaveLength(1)
+    expect(metrics[0]?.descriptor.name).toBe('cli.measure')
+    expect(metrics[0]?.descriptor.unit).toBe('ms')
+    const points = metrics[0]?.dataPoints ?? []
+    expect(points).toHaveLength(3)
+
+    const point = (name: string, label?: string) =>
+      points.find(
+        (p) => p.attributes[AttrMeasureName] === name && p.attributes[AttrMeasureLabel] === label,
+      )
+    const get = point('rules.fetch', 'get')
+    expect(get?.value).toMatchObject({ count: 1001, sum: 7 * 1000 + 200 })
+    expect(get?.value).toMatchObject({
+      buckets: {
+        boundaries: [1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 60000, 300000],
+        counts: [0, 0, 1000, 0, 0, 1, 0, 0, 0, 0, 0, 0],
+      },
+    })
+    expect(point('rules.fetch', 'post')?.value).toMatchObject({ count: 1, sum: 3 })
+    expect(point('scan.completed')?.value).toMatchObject({ count: 1, sum: 400_000 })
     expect(client.stats().queueOverflowDropped).toBe(0)
     await meterProvider.shutdown()
   })

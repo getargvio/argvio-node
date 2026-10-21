@@ -63,6 +63,17 @@ export const AttrCounterName = 'cli.counter.name'
  */
 export const AttrCounterLabel = 'cli.counter.label'
 
+/**
+ * Every tier. The name of a vendor-defined timing, a fixed identifier chosen
+ * in code. Sent on `cli.measure`.
+ */
+export const AttrMeasureName = 'cli.measure.name'
+/**
+ * Every tier. An optional fixed identifier that splits one timing into
+ * series, chosen in code. Sent on `cli.measure`.
+ */
+export const AttrMeasureLabel = 'cli.measure.label'
+
 /** Log event names. */
 export const EventSessionStarted = 'cli.session.started'
 export const EventCommandInvoked = 'cli.command.invoked'
@@ -85,6 +96,16 @@ export const MetricCommandDuration = 'cli.command.duration'
 export const MetricErrors = 'cli.errors'
 /** Unit: 1. A vendor-defined counter, see {@link Client.recordCounter}. */
 export const MetricCounter = 'cli.counter'
+/** Unit: milliseconds. A vendor-defined timing, see {@link Client.recordDuration}. */
+export const MetricMeasure = 'cli.measure'
+
+/**
+ * Bucket boundaries, in milliseconds, of the `cli.measure` histogram. The
+ * same as the Go SDK's, so a timing lands in the same buckets from either.
+ */
+export const MEASURE_BUCKET_BOUNDARIES_MS: readonly number[] = [
+  1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 60000, 300000,
+]
 
 /** The server's max_length for `cli.command.name`. */
 const MAX_COMMAND_NAME_LENGTH = 128
@@ -92,15 +113,21 @@ const MAX_COMMAND_NAME_LENGTH = 128
 /** The server's max_length for `cli.activation.feature`. */
 export const MAX_ACTIVATION_FEATURE_LENGTH = 64
 
-/** The server's max_length for `cli.error.reason`, `cli.counter.name` and `cli.counter.label`. */
+/**
+ * The server's max_length for `cli.error.reason`, `cli.counter.name`,
+ * `cli.counter.label`, `cli.measure.name` and `cli.measure.label`.
+ */
 const MAX_IDENTIFIER_LENGTH = 64
 
-/** The server's pattern for `cli.error.reason`, `cli.counter.name` and `cli.counter.label`. */
+/**
+ * The server's pattern for `cli.error.reason`, `cli.counter.name`,
+ * `cli.counter.label`, `cli.measure.name` and `cli.measure.label`.
+ */
 const IDENTIFIER_PATTERN = /^[a-z0-9][a-z0-9._-]*$/
 
 /**
- * Reports whether `value` is acceptable as an error reason, counter name or
- * counter label: the server's `^[a-z0-9][a-z0-9._-]*$` and at most 64
+ * Reports whether `value` is acceptable as an error reason, or a counter or
+ * measure name or label: the server's `^[a-z0-9][a-z0-9._-]*$` and at most 64
  * bytes (the pattern is ASCII only, so that is 64 characters). A value that
  * fails is dropped by the caller, never trimmed or rewritten into shape.
  */

@@ -44,6 +44,7 @@ numbers even from users who've never made a choice.
 | `recordError`                           | `cli.errors` counter increment by command; no category, no event |
 | `recordFeatureActivated`                | nothing                                                          |
 | `recordCounter`                         | `cli.counter` increment: name and optional label only            |
+| `recordDuration`                        | `cli.measure` timing: name and optional label only               |
 | `recordCommand` memory and CPU time     | nothing                                                          |
 | `recordSessionStart` size and startup   | nothing                                                          |
 
@@ -146,6 +147,38 @@ session or install ID, and no command path.
   vocabularies stay well under the caps.
 - A disabled client (`disabled`, `DO_NOT_TRACK`, `ARGVIO_DISABLED`)
   sends nothing, and `recordCounter` never throws.
+
+### Vendor timings, at every tier
+
+`recordDuration(name, ms, { label })` reports how long something took, in
+milliseconds (e.g. "rules fetch time, by HTTP verb"). It is sent as the
+`cli.measure` histogram with two attributes, `cli.measure.name` and, if
+given, `cli.measure.label`, next to the same command-independent resource
+attributes as counters. It carries no session or install ID, and no
+command path.
+
+> **Warning: timings are accepted at the anonymous tier.** `recordDuration`
+> sends at every tier, including `Tier.Anonymous` and CI, with no consent
+> choice made. Timing names and labels must be fixed identifiers chosen in
+> code, **never user input, file paths, host names, URLs, tokens or anything
+> derived from them**. The SDK does not scrub them.
+
+| Tier        | What `recordDuration` sends                            |
+| ----------- | ------------------------------------------------------ |
+| `Anonymous` | `cli.measure`: `cli.measure.name`, `cli.measure.label` |
+| `Basic`+    | the same; timings add nothing at a higher tier         |
+
+- `name` and `label` must each match `^[a-z0-9][a-z0-9._-]*$` and be at
+  most 64 bytes. A timing with an invalid name or label is dropped
+  entirely, not trimmed and not sent without its label.
+- `ms` must be a finite number greater than zero; zero, negative,
+  non-finite and non-numeric values are ignored.
+- Values are aggregated in memory into fixed buckets (1, 5, 10, 50, 100,
+  500, 1000, 5000, 10000, 60000 and 300000 ms, the same as the Go SDK), so a
+  hot loop is cheap: each export carries one data point per name and label.
+- The server caps the number of distinct names and, per name, distinct
+  labels for each tenant, and folds the rest into `other`.
+- A disabled client sends nothing, and `recordDuration` never throws.
 
 ### Tier.Full
 
