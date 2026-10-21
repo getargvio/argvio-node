@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.0](https://github.com/getargvio/argvio-node/compare/argvio-v0.5.0...argvio-v0.6.0) (2026-10-21)
+
+
+### Features
+
+* add recordDuration for vendor-defined timings ([bc90d42](https://github.com/getargvio/argvio-node/commit/bc90d4239462e5d688f079145312c317febeba42))
+* add recordDuration for vendor-defined timings ([ac38229](https://github.com/getargvio/argvio-node/commit/ac38229233ff694f158debd713f0215006fca2b0))
+
 ## [0.5.0](https://github.com/getargvio/argvio-node/compare/argvio-v0.4.0...argvio-v0.5.0) (2026-10-19)
 
 
