@@ -51,6 +51,18 @@ export const AttrRuntimeName = 'cli.runtime.name'
  * Only on `cli.session.started`.
  */
 export const AttrRuntimeVersion = 'cli.runtime.version'
+/**
+ * `Tier.Basic`+. How many configuration keys differ from their defaults,
+ * supplied by the vendor via the `configCustomizedCount` option. A count
+ * only, never key names or values. Only on `cli.session.started`.
+ */
+export const AttrConfigCustomizedCount = 'cli.config.customized_count'
+/**
+ * `Tier.Basic`+. Whether the user is signed in to the vendor's service
+ * (`authenticated`, `anonymous` or `unknown`), supplied by the vendor via the
+ * `authState` option. Only on `cli.session.started`.
+ */
+export const AttrAuthState = 'cli.auth.state'
 /** `Tier.Basic`+. */
 export const AttrFlagNames = 'cli.flag.names'
 /** `Tier.Basic`+. */

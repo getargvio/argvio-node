@@ -47,6 +47,7 @@ numbers even from users who've never made a choice.
 | `recordDuration`                                | `cli.measure` timing: name and optional label only               |
 | `recordCommand` memory and CPU time             | nothing                                                          |
 | `recordSessionStart` size, startup, environment | nothing                                                          |
+| `recordSessionStart` config count, auth state   | nothing                                                          |
 
 ### Tier.Basic
 
@@ -118,6 +119,30 @@ Also adds:
   above, and never at `Tier.Anonymous`. Detection is best effort: a
   multiplexer or a stale variable inherited from a parent shell can make the
   terminal wrong, and the values are only ever aggregated by the server.
+
+  `recordSessionStart` also sends two facts that only your CLI knows, each
+  set through a `createClient` option and omitted when you don't set it:
+
+  | Attribute                     | Option                  | Value                                                                                                                                                                                   |
+  | ----------------------------- | ----------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `cli.config.customized_count` | `configCustomizedCount` | How many configuration keys differ from their defaults: a whole number from 0 to 1000 (`MAX_CONFIG_CUSTOMIZED_COUNT`). Fractions are rounded down, negatives and larger counts clamped. |
+  | `cli.auth.state`              | `authState`             | Whether the user is signed in to your service: `authenticated`, `anonymous` or `unknown`. Use the `AuthState` constants.                                                                |
+
+  Each option takes a value or a callback, which runs once, when
+  `recordSessionStart` is called, so it can read config or credentials that
+  were not loaded yet at `createClient` time. A callback that throws, or a
+  value of the wrong type (a non-finite count, a string outside the three
+  states), is dropped silently and the attribute is omitted; it never
+  reaches your CLI and never stops the session event. Both are sent at
+  `Tier.Basic` and above only, and at `Tier.Anonymous` nothing is sent and
+  the callbacks are not called.
+
+  **What you must not pass.** The count is only a number: never key names,
+  values, paths or anything about what was changed. The auth state is only
+  one of the three states: never a user name, email, account or organisation
+  ID, token, or the name of the identity provider. Both are validated so
+  that anything other than a number or one of the three states is dropped,
+  but the SDK can only check the shape, not what the number means.
 
 - `recordError` starts emitting a `cli.error.raised` event: category
   (`ErrorCategory`, e.g. `ErrorCategory.Network`) plus command path. Never

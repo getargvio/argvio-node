@@ -87,17 +87,45 @@ Reasons, counter and timing names, and counter and timing labels must match
 dropped, not scrubbed. A counter increment `n` must be a positive integer,
 and a duration `ms` a finite number greater than zero.
 
+## Config customization and auth state
+
+Two facts only your CLI knows can be reported on the session start event, at
+`Basic`+, as `createClient` options. Each is a value, or a callback that runs
+once when `recordSessionStart` is called (useful when the config or
+credentials are loaded after the client is created):
+
+```ts
+import { AuthState, createClient } from '@getargvio/argvio'
+
+const client = createClient(apiKey, 'mycli', '1.4.0', {
+  // How many config keys differ from their defaults: a count, nothing else.
+  configCustomizedCount: () => countNonDefaultKeys(config),
+  // `AuthState.Authenticated`, `Anonymous` or `Unknown`.
+  authState: () => (token ? AuthState.Authenticated : AuthState.Anonymous),
+})
+```
+
+They are sent as `cli.config.customized_count` (a whole number, clamped to
+0 to 1000) and `cli.auth.state`. Leave an option out to send nothing. A
+callback that throws, or a value that isn't a number or one of the three
+states, is dropped and the attribute omitted; telemetry never breaks your CLI.
+
+> **Never pass key names or values, a user name, email, account ID or
+> token.** The count is only a number and the auth state only one of
+> `authenticated`, `anonymous` or `unknown`. The SDK checks the shape, not
+> what you mean by it.
+
 ## Consent tiers
 
 Every signal this SDK emits carries a `cli.analytics.tier` attribute
 and is shaped by the tier the current session resolved to:
 
-| Tier                  | Adds                                                                           |
-| --------------------- | ------------------------------------------------------------------------------ |
-| `Anonymous` (default) | aggregate invocation/session/exit counts only, no identifiers; vendor counters |
-| `Basic`               | command path, flag names, session and install IDs, error types and reasons     |
-| `Full`                | reserved: nothing beyond `Basic` in this SDK                                   |
-| `OptIn`               | raw error messages and stack traces, via `client.optIn()` only                 |
+| Tier                  | Adds                                                                                                    |
+| --------------------- | ------------------------------------------------------------------------------------------------------- |
+| `Anonymous` (default) | aggregate invocation/session/exit counts only, no identifiers; vendor counters                          |
+| `Basic`               | command path, flag names, session and install IDs, error types and reasons, config count and auth state |
+| `Full`                | reserved: nothing beyond `Basic` in this SDK                                                            |
+| `OptIn`               | raw error messages and stack traces, via `client.optIn()` only                                          |
 
 The SDK enforces this client-side — it is structurally difficult to
 call a lower-tier method with a higher-tier field (e.g. `recordError`

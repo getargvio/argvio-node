@@ -2,6 +2,8 @@ export { Client, OptInScope, createClient } from './client.js'
 export type { CommandResult, CounterOptions, DurationOptions } from './client.js'
 
 export type { ClientOptions, Transport } from './options.js'
+export { AuthState, isValidAuthState, MAX_CONFIG_CUSTOMIZED_COUNT } from './sessionFacts.js'
+export type { Lazy } from './sessionFacts.js'
 export {
   DEFAULT_ENDPOINT_HTTP,
   DEFAULT_ENDPOINT_GRPC,
@@ -47,6 +49,8 @@ export {
   AttrCpuTimeMs,
   AttrBinarySizeBytes,
   AttrStartupDurationMs,
+  AttrConfigCustomizedCount,
+  AttrAuthState,
   AttrFlagNames,
   AttrSessionId,
   AttrInstallId,
