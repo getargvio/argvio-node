@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import yargs from 'yargs'
 
 import { createClient, ErrorCategory, StaticProvider, Tier } from '@getargvio/argvio'
+import type { Client } from '@getargvio/argvio'
 
 import { instrument, instrumentYargs } from '../src/index.js'
 
@@ -150,6 +151,233 @@ describe('instrumentYargs', () => {
     })
 
     expect(onFail).toHaveBeenCalled()
+  })
+})
+
+interface EmittedLog {
+  eventName?: string
+  body?: unknown
+  attributes?: Record<string, unknown>
+}
+
+/** Replaces the client's log sink, so a test sees exactly what would go on the wire. */
+function captureLogs(client: Client): EmittedLog[] {
+  const logs: EmittedLog[] = []
+  ;(client as unknown as { logger: { emit: (rec: EmittedLog) => void } }).logger = {
+    emit: (rec) => logs.push(rec),
+  }
+  return logs
+}
+
+function buildNestedY(mode: 'strict' | 'recommend' | 'both' | 'none' = 'strict') {
+  const y = yargs().scriptName('testcli')
+  const configure = <T>(instance: T & ReturnType<typeof yargs>) => {
+    if (mode === 'strict' || mode === 'both') instance.strictCommands()
+    if (mode === 'recommend' || mode === 'both') instance.recommendCommands()
+    return instance
+  }
+  return configure(y)
+    .command(
+      ['status', 'st'],
+      'show status',
+      () => {},
+      () => {},
+    )
+    .command(
+      'internal-debug',
+      false,
+      () => {},
+      () => {},
+    )
+    .command(
+      'deploy',
+      'deploy things',
+      (b) =>
+        configure(b)
+          .command(
+            'push',
+            'push it',
+            () => {},
+            () => {},
+          )
+          .command(
+            ['rollback', 'undo'],
+            'roll back',
+            () => {},
+            () => {},
+          ),
+      () => {},
+    )
+}
+
+describe('unknown commands', () => {
+  async function attempt(
+    args: string[],
+    { tier = Tier.Basic, mode = 'strict' as Parameters<typeof buildNestedY>[0] } = {},
+  ) {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    try {
+      const client = makeClient(tier)
+      const logs = captureLogs(client)
+      const recordCommand = vi.spyOn(client, 'recordCommand')
+      const recordError = vi.spyOn(client, 'recordError')
+      const recordInvocation = vi.spyOn(client, 'recordCommandInvocation')
+      const y = instrumentYargs(buildNestedY(mode), client)
+      const err = await y.parseAsync(args).then(
+        () => undefined,
+        (e: unknown) => e,
+      )
+      await client.flush(500)
+      const unknown = logs.filter((l) => l.eventName === 'cli.command.unknown')
+      return { err, logs, unknown, recordCommand, recordError, recordInvocation }
+    } finally {
+      stderr.mockRestore()
+    }
+  }
+
+  it('reports the nearest top-level command and fails exactly as before', async () => {
+    const { err, unknown, logs } = await attempt(['stauts'])
+
+    expect((err as Error).message).toBe('Unknown command: stauts')
+    expect(unknown).toHaveLength(1)
+    expect(unknown[0]?.attributes).toMatchObject({ 'cli.command.suggestion': 'status' })
+    expect(unknown[0]?.body).toBeUndefined()
+    expect(logs.filter((l) => l.eventName !== 'cli.session.started')).toHaveLength(1)
+  })
+
+  it('suggests a nested command by its dotted name', async () => {
+    const { unknown } = await attempt(['deploy', 'pussh'])
+    expect(unknown).toHaveLength(1)
+    expect(unknown[0]?.attributes).toMatchObject({ 'cli.command.suggestion': 'deploy.push' })
+  })
+
+  it('resolves an alias to the command name', async () => {
+    const { unknown } = await attempt(['deploy', 'undoo'])
+    expect(unknown[0]?.attributes).toMatchObject({ 'cli.command.suggestion': 'deploy.rollback' })
+    const top = await attempt(['stt'])
+    expect(top.unknown[0]?.attributes).toMatchObject({ 'cli.command.suggestion': 'status' })
+  })
+
+  it('detects the failure under recommendCommands(), with or without strictCommands()', async () => {
+    for (const mode of ['recommend', 'both'] as const) {
+      const { err, unknown } = await attempt(['stauts'], { mode })
+      expect((err as Error).message, mode).toBe('Did you mean status?')
+      expect(unknown, mode).toHaveLength(1)
+      expect(unknown[0]?.attributes, mode).toMatchObject({ 'cli.command.suggestion': 'status' })
+    }
+  })
+
+  it('does not count the attempt as a command or an error', async () => {
+    const { recordCommand, recordError } = await attempt(['stauts'])
+    expect(recordCommand).not.toHaveBeenCalled()
+    expect(recordError).not.toHaveBeenCalled()
+  })
+
+  it('sends a bare attempt when no command is close', async () => {
+    const { unknown } = await attempt(['frobnicate'])
+    expect(unknown).toHaveLength(1)
+    expect(unknown[0]?.attributes).not.toHaveProperty('cli.command.suggestion')
+  })
+
+  it('never suggests a hidden command', async () => {
+    const { unknown } = await attempt(['internal-debu'])
+    expect(unknown).toHaveLength(1)
+    expect(unknown[0]?.attributes).not.toHaveProperty('cli.command.suggestion')
+  })
+
+  it('sends the attempt without the suggestion at Tier.Anonymous', async () => {
+    const { unknown } = await attempt(['stauts'], { tier: Tier.Anonymous })
+    expect(unknown).toHaveLength(1)
+    expect(unknown[0]?.attributes).not.toHaveProperty('cli.command.suggestion')
+  })
+
+  it('reports once, and still calls onFail, when a custom fail handler is set', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const client = makeClient()
+    const logs = captureLogs(client)
+    const onFail = vi.fn((msg: string) => {
+      throw new Error(msg)
+    })
+    const y = instrumentYargs(buildNestedY(), client, { onFail })
+    await expect(y.parseAsync(['stauts'])).rejects.toThrow('Unknown command: stauts')
+    await client.flush(500)
+    stderr.mockRestore()
+
+    expect(onFail).toHaveBeenCalledTimes(1)
+    expect(logs.filter((l) => l.eventName === 'cli.command.unknown')).toHaveLength(1)
+  })
+
+  it('never lets the typed text into anything emitted, at any tier', async () => {
+    const typed = [
+      'sk-live-4eC39HqLyjWDarjtT1zdp7dc',
+      '/home/alice/.ssh/id_rsa',
+      'alice@example.com',
+      'ghp_abcdefghijklmnopqrstuvwxyz0123456789',
+      'status-' + 'x'.repeat(100_000),
+      'stauts',
+      'dploy',
+    ]
+    for (const mode of ['strict', 'recommend', 'both'] as const) {
+      for (const tier of [Tier.Anonymous, Tier.Basic, Tier.Full, Tier.OptIn]) {
+        for (const text of typed) {
+          for (const args of [[text], ['deploy', text], [text, '--token', 'hunter2']]) {
+            const { logs, unknown } = await attempt(args, { tier, mode })
+            // recommendCommands() alone only fails when it has a close match to offer
+            if (mode !== 'recommend') expect(unknown, text.slice(0, 20)).toHaveLength(1)
+            const wire = JSON.stringify(logs)
+            expect(wire).not.toContain(text)
+            expect(wire).not.toContain('hunter2')
+            const suggestion = unknown[0]?.attributes?.['cli.command.suggestion']
+            if (suggestion !== undefined) {
+              expect(['status', 'deploy', 'deploy.push', 'deploy.rollback']).toContain(suggestion)
+            }
+          }
+        }
+      }
+    }
+  })
+
+  it('never turns a word that is not a command into part of a command name', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    for (const mode of ['strict', 'none'] as const) {
+      const client = makeClient()
+      const logs = captureLogs(client)
+      const y = instrumentYargs(buildNestedY(mode), client)
+      await y.parseAsync(['deploy', 'push', 'sk-live-4eC39HqLyjWDarjtT1zdp7dc']).catch(() => {})
+      await client.flush(500)
+
+      expect(JSON.stringify(logs), mode).not.toContain('sk-live')
+    }
+    stderr.mockRestore()
+  })
+
+  it('sends nothing without strictCommands() or recommendCommands(), where yargs does not fail', async () => {
+    const { err, unknown } = await attempt(['stauts'], { mode: 'none' })
+    expect(err).toBeUndefined()
+    expect(unknown).toHaveLength(0)
+  })
+
+  it('does not report other validation failures', async () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation(() => true)
+    const client = makeClient()
+    const unknown = vi.spyOn(client, 'recordUnknownCommand')
+    const recordError = vi.spyOn(client, 'recordError')
+    const y = instrumentYargs(
+      yargs()
+        .scriptName('testcli')
+        .command(
+          'greet <name>',
+          'greet',
+          () => {},
+          () => {},
+        ),
+      client,
+    )
+    await expect(y.parseAsync(['greet'])).rejects.toThrow()
+    stderr.mockRestore()
+
+    expect(unknown).not.toHaveBeenCalled()
+    expect(recordError).toHaveBeenCalled()
   })
 })
 

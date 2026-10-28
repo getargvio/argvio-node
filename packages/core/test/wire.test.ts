@@ -16,6 +16,7 @@ import {
   AttrActivationFeature,
   AttrAuthState,
   AttrCommandName,
+  AttrCommandSuggestion,
   AttrConfigCustomizedCount,
   AttrDurationMs,
   AttrErrorMessage,
@@ -45,6 +46,7 @@ import {
   createClient,
   EventCommandCompleted,
   EventCommandInvoked,
+  EventCommandUnknown,
   EventErrorRaised,
   EventFeatureActivated,
   EventHelpViewed,
@@ -1276,5 +1278,135 @@ describe('session start config customization and auth state', () => {
     expect(client.initError).toBeNull()
     client.recordSessionStart()
     await client.shutdown(200)
+  })
+})
+
+describe('recordUnknownCommand', () => {
+  const KNOWN = ['deploy', 'deploy.push', 'status']
+
+  it('uses the exact wire names the server allowlist expects', () => {
+    expect(EventCommandUnknown).toBe('cli.command.unknown')
+    expect(AttrCommandSuggestion).toBe('cli.command.suggestion')
+  })
+
+  it('sends the suggestion at Tier.Basic+ and nothing else', async () => {
+    for (const tier of [Tier.Basic, Tier.Full, Tier.OptIn]) {
+      const { client, logs } = capturingClient(tier)
+      client.recordUnknownCommand('deploy.push', KNOWN)
+      await client.flush(500)
+
+      expect(logs, String(tier)).toHaveLength(1)
+      expect(logs[0]?.eventName).toBe(EventCommandUnknown)
+      expect(Object.keys(logs[0]?.attributes ?? {}).sort()).toEqual([
+        'cli.analytics.tier',
+        AttrCommandSuggestion,
+      ])
+      expect(logs[0]?.attributes[AttrCommandSuggestion]).toBe('deploy.push')
+    }
+  })
+
+  it('sends a bare attempt at Tier.Anonymous, without the suggestion', async () => {
+    const { client, logs } = capturingClient(Tier.Anonymous)
+    client.recordUnknownCommand('deploy.push', KNOWN)
+    await client.flush(500)
+
+    expect(logs).toHaveLength(1)
+    expect(logs[0]?.eventName).toBe(EventCommandUnknown)
+    expect(Object.keys(logs[0]?.attributes ?? {})).toEqual(['cli.analytics.tier'])
+  })
+
+  it('carries no command, flags, identifiers, body or error attributes', async () => {
+    const { client, logs } = capturingClient(Tier.OptIn)
+    client.recordSessionStart()
+    client.recordUnknownCommand('status', KNOWN)
+    await client.flush(500)
+
+    const rec = logs.find((l) => l.eventName === EventCommandUnknown)
+    expect(rec).toBeDefined()
+    for (const key of [
+      AttrCommandName,
+      AttrFlagNames,
+      AttrSessionId,
+      AttrInstallId,
+      AttrErrorType,
+      AttrErrorMessage,
+    ]) {
+      expect(rec?.attributes, key).not.toHaveProperty(key)
+    }
+    expect(rec).not.toHaveProperty('body')
+  })
+
+  it('works without a suggestion', async () => {
+    const { client, logs } = capturingClient(Tier.Basic)
+    client.recordUnknownCommand()
+    client.recordUnknownCommand(undefined, KNOWN)
+    await client.flush(500)
+
+    expect(logs).toHaveLength(2)
+    for (const rec of logs) expect(rec.attributes).not.toHaveProperty(AttrCommandSuggestion)
+  })
+
+  it('drops a suggestion that is not a registered command, keeping the attempt', async () => {
+    const typed = [
+      'sk-live-4eC39HqLyjWDarjtT1zdp7dc',
+      '/home/alice/.ssh/id_rsa',
+      'DEPLOY',
+      'deploy.pus',
+      'x'.repeat(5000),
+      '',
+      ' deploy',
+    ]
+    for (const value of typed) {
+      const { client, logs } = capturingClient(Tier.Basic)
+      client.recordUnknownCommand(value, KNOWN)
+      await client.flush(500)
+
+      expect(logs, value.slice(0, 20)).toHaveLength(1)
+      expect(logs[0]?.attributes).not.toHaveProperty(AttrCommandSuggestion)
+      expect(JSON.stringify(logs)).not.toContain(value || '\u0000')
+    }
+  })
+
+  it('drops any suggestion when no registered commands are given', async () => {
+    const { client, logs } = capturingClient(Tier.Basic)
+    client.recordUnknownCommand('deploy')
+    await client.flush(500)
+
+    expect(logs).toHaveLength(1)
+    expect(logs[0]?.attributes).not.toHaveProperty(AttrCommandSuggestion)
+  })
+
+  it('drops a suggestion over the server limit of 128 bytes, even if registered', async () => {
+    const long = 'a'.repeat(129)
+    const { client, logs } = capturingClient(Tier.Basic)
+    client.recordUnknownCommand(long, [long])
+    client.recordUnknownCommand('a'.repeat(128), ['a'.repeat(128)])
+    await client.flush(500)
+
+    expect(logs[0]?.attributes).not.toHaveProperty(AttrCommandSuggestion)
+    expect(logs[1]?.attributes[AttrCommandSuggestion]).toBe('a'.repeat(128))
+  })
+
+  it('ignores values of the wrong type instead of throwing', async () => {
+    const { client, logs } = capturingClient(Tier.Basic)
+    for (const bad of [1, null, {}, ['deploy'], true]) {
+      expect(() => {
+        client.recordUnknownCommand(bad as unknown as string, KNOWN)
+      }).not.toThrow()
+    }
+    expect(() => {
+      client.recordUnknownCommand('deploy', 5 as unknown as string[])
+    }).not.toThrow()
+    await client.flush(500)
+
+    for (const rec of logs) expect(rec.attributes).not.toHaveProperty(AttrCommandSuggestion)
+  })
+
+  it('is a safe no-op on a disabled client', async () => {
+    const client = createClient('key', 'testcli', '1.0.0', { disabled: true })
+    expect(() => {
+      client.recordUnknownCommand('deploy', KNOWN)
+    }).not.toThrow()
+    await client.shutdown(100)
   })
 })

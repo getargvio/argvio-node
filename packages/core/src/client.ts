@@ -21,6 +21,7 @@ import {
   AttrActivationFeature,
   AttrAuthState,
   AttrCommandName,
+  AttrCommandSuggestion,
   AttrConfigCustomizedCount,
   AttrCounterLabel,
   AttrCounterName,
@@ -48,6 +49,7 @@ import {
   AttrSessionId,
   EventCommandCompleted,
   EventCommandInvoked,
+  EventCommandUnknown,
   EventErrorRaised,
   EventFeatureActivated,
   EventHelpViewed,
@@ -68,6 +70,7 @@ import {
   readProcessResourceUsage,
   readStartupDurationMs,
 } from './taxonomy.js'
+import { MAX_COMMAND_SUGGESTION_LENGTH } from './suggest.js'
 import type { Stats } from './safety.js'
 import { ARGVIO_DEBUG, DroppedCounters, safeRun } from './safety.js'
 
@@ -159,6 +162,13 @@ async function withTimeout(promise: Promise<void>, timeoutMs: number): Promise<v
   } finally {
     if (timer) clearTimeout(timer)
   }
+}
+
+function isKnownCommandName(value: unknown, known: Iterable<string>): value is string {
+  if (typeof value !== 'string' || value.length === 0) return false
+  if (value.length > MAX_COMMAND_SUGGESTION_LENGTH) return false
+  for (const name of known) if (name === value) return true
+  return false
 }
 
 function toError(value: unknown): Error {
@@ -552,6 +562,38 @@ export class Client {
       this.emitEvent(EventHelpViewed, SeverityNumber.INFO, {
         [AttrCommandName]: this.name(commandPath),
         [AttrHelpFlag]: 'help',
+      })
+    }, this.counters)
+  }
+
+  /**
+   * Records an attempt to run a command that does not exist, for the
+   * server's unknown-command rate and its "did you mean" ranking. It is not a
+   * command invocation, so call it instead of {@link recordCommand} and
+   * {@link recordError} for the failed lookup (the integrations do). Emitted
+   * at every tier as a bare event with no identifiers.
+   *
+   * `suggestion` is the nearest known command to what the user typed, as a
+   * dotted command name (`"deploy.push"`, the same string `recordCommand`
+   * reports), and is sent at `Tier.Basic`+ only. **What the user typed is
+   * arbitrary input and may hold secrets or personal data: never pass it, or
+   * anything derived from it.** To make that structural, a suggestion is only
+   * sent if it is one of `knownCommands`, the CLI's registered command names;
+   * with no `knownCommands`, or a value outside them, or one over the
+   * server's 128 byte limit, it is dropped and the attempt is sent without it.
+   * {@link nearestCommand} picks a suggestion that satisfies this.
+   *
+   * Never throws, and does nothing on a disabled Client.
+   */
+  recordUnknownCommand(suggestion?: string, knownCommands: Iterable<string> = []): void {
+    safeRun(() => {
+      if (!this.enabled()) return
+      const attrs: Attributes = {}
+      if (tierAllows(this.tier, Tier.Basic) && isKnownCommandName(suggestion, knownCommands)) {
+        attrs[AttrCommandSuggestion] = suggestion
+      }
+      this.queue.push(() => {
+        this.emitEventNow(EventCommandUnknown, SeverityNumber.INFO, attrs)
       })
     }, this.counters)
   }

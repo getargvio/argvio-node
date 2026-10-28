@@ -1,7 +1,8 @@
 import type { Argv, Arguments } from 'yargs'
 
 import type { Client, ClientOptions } from '@getargvio/argvio'
-import { createClient, ErrorCategory } from '@getargvio/argvio'
+import { createClient, ErrorCategory, nearestCommand } from '@getargvio/argvio'
+import type { CommandCandidate } from '@getargvio/argvio'
 import type { ErrorCategory as ErrorCategoryType, ErrorClassification } from '@getargvio/argvio'
 
 const INVOCATION_MARKER = Symbol('argvio.recordedInvocation')
@@ -49,10 +50,15 @@ function extractFlagNames(rawArgs: readonly string[]): string[] {
   return [...names]
 }
 
-function commandPathFrom(argv: Arguments): string {
+/**
+ * The command path yargs has resolved, as `"script sub leaf"`. Built from
+ * the commands yargs matched, never from `argv._`, which also holds any
+ * word that matched no command (a mistyped command, or whatever the user
+ * typed in its place). Without the resolved path, just the script.
+ */
+function commandPathFrom(argv: Arguments, resolved: readonly string[]): string {
   const script = typeof argv['$0'] === 'string' ? argv['$0'] : ''
-  const segments = argv._.map((segment) => String(segment))
-  return [script, ...segments].filter(Boolean).join(' ')
+  return [script, ...resolved].filter(Boolean).join(' ')
 }
 
 /**
@@ -70,6 +76,87 @@ function guessCommandPathFromRawArgs(rawArgs: readonly string[]): string {
   return segments.join(' ')
 }
 
+/**
+ * The failure messages yargs raises for a command that does not exist:
+ * `Unknown command: x` with `strictCommands()`, `Did you mean y?` with
+ * `recommendCommands()`. The message is only matched against, never read
+ * for its content: it carries what the user typed. These are yargs' default
+ * (English) texts, so under another `locale()` an unknown command goes
+ * unreported rather than risk reporting something else.
+ */
+const UNKNOWN_COMMAND_MESSAGE = /^(?:Unknown commands?: |Did you mean )/
+
+/** The part of yargs' internals this package reads to find the registered commands. */
+interface YargsInternals {
+  getInternalMethods?: () => {
+    getContext: () => { commands: readonly string[] }
+    getCommandInstance: () => {
+      getCommandHandlers: () => Record<string, { description?: unknown }>
+      aliasMap: Record<string, string>
+    }
+  }
+}
+
+/**
+ * The commands registered where yargs gave up, as candidates for a
+ * suggestion, and the command path it had resolved by then. yargs builds a
+ * subcommand's own commands only when it is run, so these are the siblings
+ * of the unknown command, not the whole tree. Hidden commands (described as
+ * `false`) and the default command are left out.
+ */
+function registeredCommands(
+  yargsInstance: Argv,
+): { resolved: readonly string[]; keys: string[]; candidates: CommandCandidate[] } | undefined {
+  const internals = (yargsInstance as unknown as YargsInternals).getInternalMethods?.()
+  if (!internals) return undefined
+  const resolved = internals.getContext().commands
+  const commandInstance = internals.getCommandInstance()
+  const handlers = commandInstance.getCommandHandlers()
+  const aliasMap = commandInstance.aliasMap
+  const nameOf = (command: string): string => [...resolved, command].join('.')
+  const candidates: CommandCandidate[] = []
+  for (const [command, handler] of Object.entries(handlers)) {
+    if (command.startsWith('$') || handler.description === false) continue
+    candidates.push({ token: command, name: nameOf(command) })
+  }
+  for (const [alias, command] of Object.entries(aliasMap)) {
+    const handler = handlers[command]
+    if (!handler || command.startsWith('$') || handler.description === false) continue
+    candidates.push({ token: alias, name: nameOf(command) })
+  }
+  return { resolved, keys: Object.keys(handlers).concat(Object.keys(aliasMap)), candidates }
+}
+
+/**
+ * Reports whether `strictCommands()` is about to fail this parse for a word
+ * that matches no command, which is yargs' own check: the words after the
+ * resolved path, none of which is a command registered there.
+ */
+function failsAsUnknownCommand(yargsInstance: Argv, argv: Arguments): boolean {
+  const strictCommands = (yargsInstance as unknown as { getStrictCommands?: () => boolean })
+    .getStrictCommands
+  if (!strictCommands?.call(yargsInstance)) return false
+  const registered = registeredCommands(yargsInstance)
+  if (!registered) return false
+  const { resolved, keys } = registered
+  if (resolved.length === 0 && keys.length === 0) return false
+  return argv._.slice(resolved.length).some((word) => !keys.includes(String(word)))
+}
+
+/**
+ * The first word after the already resolved command path: what yargs could
+ * not match. Only ever used to look a command up, never recorded. A flag's
+ * value is indistinguishable from a command here, so with a flag before the
+ * command this can pick the wrong word, which at worst loses the suggestion.
+ */
+function typedCommand(rawArgs: readonly string[], resolved: readonly string[]): string | undefined {
+  const end = rawArgs.indexOf('--')
+  const words = (end === -1 ? rawArgs : rawArgs.slice(0, end)).filter(
+    (token) => !token.startsWith('-'),
+  )
+  return words[resolved.length]
+}
+
 type ParseFn = Argv['parseAsync']
 
 /**
@@ -82,6 +169,10 @@ type ParseFn = Argv['parseAsync']
  *   exit code, latency) and its errors, are captured by wrapping
  *   `parseAsync`/`parse` — the one place guaranteed to run exactly once
  *   per invocation, regardless of success or failure.
+ * - A command that does not exist (`strictCommands()` or
+ *   `recommendCommands()`) is reported with `Client.recordUnknownCommand`
+ *   instead of as a failed command: it carries only the nearest registered
+ *   command, never what was typed. yargs fails as before.
  * - Help usage is captured on a **best-effort** basis: yargs handles
  *   `--help`/`-h` internally before middleware, `.fail()`, or any
  *   command handler ever runs, so this package scans the raw args
@@ -108,6 +199,35 @@ export function instrumentYargs(
 
   let lastCommandPath = ''
   let rawArgs: readonly string[] = []
+  let unknownCommandReported = false
+
+  const resolvedCommands = (): readonly string[] => {
+    try {
+      return registeredCommands(yargsInstance)?.resolved ?? []
+    } catch {
+      return []
+    }
+  }
+
+  // Never throws: this runs inside yargs' failure path.
+  const reportUnknownCommand = (): void => {
+    unknownCommandReported = true
+    let suggestion: string | undefined
+    let known: string[] = []
+    try {
+      const registered = registeredCommands(yargsInstance)
+      if (registered) {
+        known = registered.candidates.map((candidate) => candidate.name)
+        suggestion = nearestCommand(
+          typedCommand(rawArgs, registered.resolved),
+          registered.candidates,
+        )
+      }
+    } catch {
+      // no suggestion: the attempt is still reported
+    }
+    client.recordUnknownCommand(suggestion, known)
+  }
 
   if (captureInvocation) {
     yargsInstance.middleware((argv) => {
@@ -115,7 +235,11 @@ export function instrumentYargs(
       if (marker[INVOCATION_MARKER]) return
       marker[INVOCATION_MARKER] = true
 
-      lastCommandPath = commandPathFrom(argv)
+      // A command that doesn't exist is not an invocation: it is reported
+      // once yargs has failed (below), and its words never become a name.
+      if (failsAsUnknownCommand(yargsInstance, argv)) return
+
+      lastCommandPath = commandPathFrom(argv, resolvedCommands())
       client.recordCommandInvocation(lastCommandPath, extractFlagNames(rawArgs))
     }, true)
   }
@@ -133,6 +257,9 @@ export function instrumentYargs(
   // Error/exit-code/latency recording happens uniformly for every
   // failure mode in the `parseAsync` wrapper's `catch` below instead.
   yargsInstance.fail((msg, err, yi) => {
+    if (!err && !unknownCommandReported && UNKNOWN_COMMAND_MESSAGE.test(msg)) {
+      reportUnknownCommand()
+    }
     if (options.onFail) {
       options.onFail(msg, err, yi)
       return
@@ -145,15 +272,17 @@ export function instrumentYargs(
     return function wrapped(this: Argv, ...args: Parameters<ParseFn>) {
       const maybeArgs = args[0]
       rawArgs = Array.isArray(maybeArgs) ? maybeArgs.map(String) : process.argv.slice(2)
+      unknownCommandReported = false
       client.recordSessionStart()
 
       const helpRequested = helpFlags.some((flag) => rawArgs.includes(flag))
       if (captureHelp && helpRequested) {
         client.recordHelpFlagUsage(guessCommandPathFromRawArgs(rawArgs))
       }
-      // Help output isn't a command run, same as in the cobra integration.
+      // Help output isn't a command run, same as in the cobra integration,
+      // and neither is a lookup that found no command.
       const recordCommand = (exitCode: number): void => {
-        if (helpRequested) return
+        if (helpRequested || unknownCommandReported) return
         client.recordCommand({
           path: lastCommandPath,
           flagNames: extractFlagNames(rawArgs),
@@ -182,6 +311,7 @@ export function instrumentYargs(
         })
         .catch((err: unknown) => {
           recordCommand(1)
+          if (unknownCommandReported) throw err
           const classified = classify(err instanceof Error ? err : new Error(String(err)))
           const { category, reason } =
             typeof classified === 'string' ? { category: classified } : classified

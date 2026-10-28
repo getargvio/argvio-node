@@ -51,6 +51,7 @@ export {
   AttrStartupDurationMs,
   AttrConfigCustomizedCount,
   AttrAuthState,
+  AttrCommandSuggestion,
   AttrFlagNames,
   AttrSessionId,
   AttrInstallId,
@@ -70,6 +71,7 @@ export {
   EventCommandCompleted,
   EventFeatureActivated,
   EventHelpViewed,
+  EventCommandUnknown,
   EventErrorRaised,
   SpanCommandPrefix,
   MetricCommandInvocations,
@@ -79,6 +81,8 @@ export {
   MetricMeasure,
   MEASURE_BUCKET_BOUNDARIES_MS,
 } from './taxonomy.js'
+export { nearestCommand } from './suggest.js'
+export type { CommandCandidate } from './suggest.js'
 export {
   ResourceAttrCLIVersion,
   ResourceAttrOS,

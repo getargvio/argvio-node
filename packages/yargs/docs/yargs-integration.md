@@ -83,6 +83,39 @@ getter for a previously registered fail function. If you have your own
 `.fail()` logic, pass it as `onFail` instead of calling `.fail()`
 yourself.
 
+### Unknown commands
+
+yargs only fails on a command it does not know when you ask it to:
+`strictCommands()` fails with `Unknown command: x`, and `recommendCommands()`
+fails with `Did you mean y?` when it has a close match. (`strict()` alone
+reports `Unknown argument: x`, which cannot be told apart from an unknown
+option, so it is not reported; add `strictCommands()`.) Without either, yargs
+carries on and there is nothing to report.
+
+When the `.fail()` handler this package installs sees one of those two
+failures, it reports the attempt with `Client.recordUnknownCommand` instead of
+recording a failed command and an error, then continues as before: your
+`onFail`, or print-and-rethrow, so the message and exit code are unchanged.
+The message is only matched against, never read: it holds what the user
+typed. Those are yargs' default English texts, so under another `locale()` the
+attempt is not reported.
+
+What is sent is the fact of the attempt and, at `Tier.Basic`+, the nearest
+_registered_ command as a dotted name (`deploy.push`), never the typed text:
+the first word yargs could not match is only used to find the closest command
+among those registered where yargs gave up (names and aliases, hidden commands
+and the default command excluded), within a small edit distance. yargs builds
+a subcommand's own commands only when it runs, so these are the siblings of
+the unknown command, not the whole tree. The registered commands are read from
+yargs' `getInternalMethods()`, which is not public API: if a yargs version
+drops it, the attempt is still reported, without a suggestion. A flag placed
+before the command can make the wrong word the one that is compared, which at
+worst loses the suggestion. See `packages/core/docs/consent.md` for the tiers.
+
+The command path of an invocation is built from the commands yargs matched,
+not from every word it parsed, so a word that is no command (a mistyped
+command, or an extra argument) never becomes part of a command name.
+
 ### Help capture is best-effort
 
 yargs handles `--help`/`-h` internally before middleware, `.fail()`, or
