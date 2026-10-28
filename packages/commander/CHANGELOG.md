@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/getargvio/argvio-node/compare/commander-v0.4.0...commander-v0.5.0) (2026-10-28)
+
+
+### Features
+
+* report unknown-command attempts without user-typed text ([590c473](https://github.com/getargvio/argvio-node/commit/590c473dda1c3cfc0a9ceff9b922a82482a83040))
+* report unknown-command attempts without user-typed text ([85b116e](https://github.com/getargvio/argvio-node/commit/85b116e36bea4be372ae76b165c2ac464df85770))
+
 ## [0.4.0](https://github.com/getargvio/argvio-node/compare/commander-v0.3.0...commander-v0.4.0) (2026-10-19)
 
 
