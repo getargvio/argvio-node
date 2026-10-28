@@ -10,7 +10,7 @@ import {
   MeterProvider,
   PeriodicExportingMetricReader,
 } from '@opentelemetry/sdk-metrics'
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   AttrActivationFeature,
@@ -30,7 +30,12 @@ import {
   AttrBinarySizeBytes,
   AttrCpuTimeMs,
   AttrPeakRssBytes,
+  AttrRuntimeName,
+  AttrRuntimeVersion,
   AttrSessionId,
+  AttrShell,
+  AttrStdoutIsTty,
+  AttrTerminal,
   AttrStartupDurationMs,
   Client,
   ErrorCategory,
@@ -53,6 +58,7 @@ import {
   readProcessResourceUsage,
   readStartupDurationMs,
 } from '../src/taxonomy.js'
+import { stubStdoutIsTty } from './stdoutTty.js'
 
 interface LogRecord {
   eventName: string
@@ -365,6 +371,119 @@ async function asSea(size: number | null, fn: () => Promise<void> | void): Promi
     getBuiltinModule.mockRestore()
   }
 }
+
+describe('session start shell, terminal, runtime and TTY', () => {
+  const sessionKeys = [
+    AttrShell,
+    AttrTerminal,
+    AttrStdoutIsTty,
+    AttrRuntimeName,
+    AttrRuntimeVersion,
+  ]
+
+  // Clears everything the detection reads, then sets `env`.
+  function withEnv(env: Record<string, string>) {
+    for (const name of Object.keys(process.env)) {
+      if (
+        /^(SHELL|TERM_PROGRAM|TMUX|STY|WT_SESSION|VTE_VERSION|PSModulePath|PROMPT|ComSpec)$|_WINDOW_ID$|^(ALACRITTY|KITTY|KONSOLE|XTERM|ITERM|WEZTERM|GHOSTTY)_/.test(
+          name,
+        )
+      ) {
+        vi.stubEnv(name, undefined as never)
+      }
+    }
+    for (const [name, value] of Object.entries(env)) vi.stubEnv(name, value)
+  }
+
+  let restoreTty = () => {}
+
+  afterEach(() => {
+    restoreTty()
+    restoreTty = () => {}
+    vi.unstubAllEnvs()
+    vi.restoreAllMocks()
+  })
+
+  it('uses the exact wire names the server allowlist expects', () => {
+    expect(AttrShell).toBe('cli.shell')
+    expect(AttrTerminal).toBe('cli.terminal')
+    expect(AttrStdoutIsTty).toBe('cli.stdout.is_tty')
+    expect(AttrRuntimeName).toBe('cli.runtime.name')
+    expect(AttrRuntimeVersion).toBe('cli.runtime.version')
+  })
+
+  it('sends all five at Tier.Basic+, on the session start only', async () => {
+    withEnv({ SHELL: '/usr/bin/zsh', TERM_PROGRAM: 'WezTerm' })
+    restoreTty = stubStdoutIsTty(true)
+    for (const tier of [Tier.Basic, Tier.Full, Tier.OptIn]) {
+      const { client, logs, event } = capturingClient(tier)
+      client.recordSessionStart()
+      client.recordCommandInvocation('testcli sub')
+      await client.flush(500)
+
+      const attrs = event(EventSessionStarted)?.attributes
+      expect(attrs?.[AttrShell]).toBe('zsh')
+      expect(attrs?.[AttrTerminal]).toBe('wezterm')
+      expect(attrs?.[AttrStdoutIsTty]).toBe(true)
+      expect(attrs?.[AttrRuntimeName]).toBe('node')
+      expect(attrs?.[AttrRuntimeVersion]).toBe(process.versions.node)
+      for (const log of logs.filter((l) => l.eventName !== EventSessionStarted)) {
+        for (const key of sessionKeys) expect(log.attributes).not.toHaveProperty(key)
+      }
+    }
+  })
+
+  it('sends none of them at Tier.Anonymous', async () => {
+    withEnv({ SHELL: '/usr/bin/zsh', TERM_PROGRAM: 'WezTerm' })
+    restoreTty = stubStdoutIsTty(true)
+    const { client, logs, event } = capturingClient(Tier.Anonymous)
+    client.recordSessionStart()
+    await client.flush(500)
+
+    expect(event(EventSessionStarted)).toBeDefined()
+    for (const log of logs) {
+      for (const key of sessionKeys) expect(log.attributes).not.toHaveProperty(key)
+    }
+  })
+
+  it('reports false for piped output', async () => {
+    withEnv({ SHELL: '/bin/bash' })
+    restoreTty = stubStdoutIsTty(undefined)
+    const { client, event } = capturingClient(Tier.Basic)
+    client.recordSessionStart()
+    await client.flush(500)
+
+    expect(event(EventSessionStarted)?.attributes[AttrStdoutIsTty]).toBe(false)
+  })
+
+  it('reports other and unknown instead of echoing the environment', async () => {
+    withEnv({ SHELL: '/home/alice/bin/my-shell', TERM_PROGRAM: '$(whoami)' })
+    const { client, event } = capturingClient(Tier.Basic)
+    client.recordSessionStart()
+    await client.flush(500)
+
+    expect(event(EventSessionStarted)?.attributes[AttrShell]).toBe('other')
+    expect(event(EventSessionStarted)?.attributes[AttrTerminal]).toBe('other')
+
+    withEnv({})
+    const second = capturingClient(Tier.Basic)
+    second.client.recordSessionStart()
+    await second.client.flush(500)
+
+    expect(second.event(EventSessionStarted)?.attributes).not.toHaveProperty(AttrShell)
+    expect(second.event(EventSessionStarted)?.attributes[AttrTerminal]).toBe('unknown')
+  })
+
+  it('reads the environment when recordSessionStart is called, not when the job runs', async () => {
+    withEnv({ SHELL: '/bin/fish' })
+    const { client, event } = capturingClient(Tier.Basic)
+    client.recordSessionStart()
+    vi.stubEnv('SHELL', '/bin/bash')
+    await client.flush(500)
+
+    expect(event(EventSessionStarted)?.attributes[AttrShell]).toBe('fish')
+  })
+})
 
 describe('session start binary size and startup overhead', () => {
   it('reports startup overhead in whole milliseconds at Tier.Basic+, on the session start only', async () => {

@@ -34,19 +34,19 @@ names. Every taxonomy method still emits _something_ at this tier — an
 aggregate counter increment — so vendors get install/usage volume
 numbers even from users who've never made a choice.
 
-| Method                                  | What's emitted at Anonymous                                      |
-| --------------------------------------- | ---------------------------------------------------------------- |
-| `recordSessionStart`/`recordSessionEnd` | `cli.sessions` counter increment only                            |
-| `recordCommandInvocation`               | `cli.invocations` counter increment only                         |
-| `recordExitCode`                        | exit code, no command path                                       |
-| `recordLatency`                         | duration, no command path                                        |
-| `recordHelpFlagUsage`                   | a bare "help was used" event, no command path                    |
-| `recordError`                           | `cli.errors` counter increment by command; no category, no event |
-| `recordFeatureActivated`                | nothing                                                          |
-| `recordCounter`                         | `cli.counter` increment: name and optional label only            |
-| `recordDuration`                        | `cli.measure` timing: name and optional label only               |
-| `recordCommand` memory and CPU time     | nothing                                                          |
-| `recordSessionStart` size and startup   | nothing                                                          |
+| Method                                          | What's emitted at Anonymous                                      |
+| ----------------------------------------------- | ---------------------------------------------------------------- |
+| `recordSessionStart`/`recordSessionEnd`         | `cli.sessions` counter increment only                            |
+| `recordCommandInvocation`                       | `cli.invocations` counter increment only                         |
+| `recordExitCode`                                | exit code, no command path                                       |
+| `recordLatency`                                 | duration, no command path                                        |
+| `recordHelpFlagUsage`                           | a bare "help was used" event, no command path                    |
+| `recordError`                                   | `cli.errors` counter increment by command; no category, no event |
+| `recordFeatureActivated`                        | nothing                                                          |
+| `recordCounter`                                 | `cli.counter` increment: name and optional label only            |
+| `recordDuration`                                | `cli.measure` timing: name and optional label only               |
+| `recordCommand` memory and CPU time             | nothing                                                          |
+| `recordSessionStart` size, startup, environment | nothing                                                          |
 
 ### Tier.Basic
 
@@ -99,6 +99,25 @@ Also adds:
 
   Either is omitted, never sent as zero, if it can't be read. Nothing is
   sent at `Tier.Anonymous`.
+
+  `recordSessionStart` also adds the environment the CLI runs in, read once
+  from environment variables and `process`, with no subprocess. The shell
+  and terminal are the privacy-sensitive part: each is mapped to a small
+  fixed vocabulary in `src/environment.ts`, so a raw environment string,
+  a path or `TERM` is never sent. Anything that can't be detected is omitted.
+
+  | Attribute             | Value                                                                                                                                                                                                                                                                                                                                                   |
+  | --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | `cli.shell`           | Basename of `$SHELL`, one of `bash`, `zsh`, `fish`, `sh`, `dash`, `ksh`, `tcsh`, `csh`, `nushell`, `elvish`, `xonsh`, `powershell`, `cmd`, else `other`. Never the path. On Windows without `$SHELL`: `powershell` if `PSModulePath` is set and `PROMPT` isn't, else `cmd` if `ComSpec` is set. Omitted if neither.                                     |
+  | `cli.terminal`        | From terminal-specific markers, then `TERM_PROGRAM`, then a multiplexer (`TMUX`, `STY`): `windows-terminal`, `kitty`, `wezterm`, `ghostty`, `konsole`, `iterm2`, `vte`, `xterm`, `alacritty`, `apple-terminal`, `vscode`, `hyper`, `warp`, `zed`, `rio`, `tmux`, `screen`. A `TERM_PROGRAM` outside the list is `other`; no marker at all is `unknown`. |
+  | `cli.stdout.is_tty`   | `true` when `process.stdout.isTTY === true`, otherwise `false` (piped or redirected).                                                                                                                                                                                                                                                                   |
+  | `cli.runtime.name`    | `node`.                                                                                                                                                                                                                                                                                                                                                 |
+  | `cli.runtime.version` | `process.versions.node`, e.g. `22.12.0`. Sent together with the runtime name.                                                                                                                                                                                                                                                                           |
+
+  All five are sent on `cli.session.started` only, at `Tier.Basic` and
+  above, and never at `Tier.Anonymous`. Detection is best effort: a
+  multiplexer or a stale variable inherited from a parent shell can make the
+  terminal wrong, and the values are only ever aggregated by the server.
 
 - `recordError` starts emitting a `cli.error.raised` event: category
   (`ErrorCategory`, e.g. `ErrorCategory.Network`) plus command path. Never
