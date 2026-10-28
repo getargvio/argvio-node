@@ -2,7 +2,8 @@ import { CommanderError } from 'commander'
 import type { Command } from 'commander'
 
 import type { Client, ClientOptions } from '@getargvio/argvio'
-import { createClient, ErrorCategory } from '@getargvio/argvio'
+import { createClient, ErrorCategory, nearestCommand } from '@getargvio/argvio'
+import type { CommandCandidate } from '@getargvio/argvio'
 import type { ErrorCategory as ErrorCategoryType, ErrorClassification } from '@getargvio/argvio'
 
 /** Configures {@link instrumentCommander}. */
@@ -55,6 +56,77 @@ function isControlFlowExit(err: unknown): err is CommanderError {
   return err instanceof CommanderError && err.exitCode === 0
 }
 
+/** The code commander gives the error it raises for a command that does not exist. */
+const UNKNOWN_COMMAND_CODE = 'commander.unknownCommand'
+
+/** The commands the user can see below `cmd`, hidden ones left out. */
+function visibleSubcommands(cmd: Command): Command[] {
+  const visible = new Set(cmd.createHelp().visibleCommands(cmd))
+  return cmd.commands.filter((sub) => visible.has(sub))
+}
+
+/** The dotted `cli.command.name` of `cmd`: the path below the root, without the CLI's own name. */
+function dottedName(cmd: Command): string {
+  const names: string[] = []
+  for (let current: Command | null = cmd; current?.parent; current = current.parent) {
+    names.unshift(current.name())
+  }
+  return names.join('.')
+}
+
+/** Every visible command in the tree below `cmd`, as dotted names. */
+function registeredCommandNames(cmd: Command, into: string[] = []): string[] {
+  for (const sub of visibleSubcommands(cmd)) {
+    into.push(dottedName(sub))
+    registeredCommandNames(sub, into)
+  }
+  return into
+}
+
+/**
+ * Finds the command commander gave up on: the deepest one that resolved a
+ * subcommand from its arguments and then found no match for the next
+ * operand. The operand itself is what the user typed, so it is only ever
+ * used to look a command up, never recorded.
+ */
+function failedLookup(program: Command): { cmd: Command; typed: string } | undefined {
+  let cmd = program
+  for (;;) {
+    const typed = cmd.args[0]
+    if (typed === undefined) return undefined
+    const next = cmd.commands.find((sub) => sub.name() === typed || sub.aliases().includes(typed))
+    if (!next) return { cmd, typed }
+    cmd = next
+  }
+}
+
+/**
+ * Reports an unknown command to the client with the nearest known command as
+ * its only content. What the user typed goes into {@link nearestCommand},
+ * which returns one of the registered command names or nothing, and is never
+ * passed on. Never throws.
+ */
+function recordUnknownCommand(program: Command, client: Client): void {
+  let suggestion: string | undefined
+  let known: string[] = []
+  try {
+    known = registeredCommandNames(program)
+    const failed = failedLookup(program)
+    if (failed) {
+      const prefix = dottedName(failed.cmd)
+      const candidates: CommandCandidate[] = []
+      for (const sub of visibleSubcommands(failed.cmd)) {
+        const name = prefix ? `${prefix}.${sub.name()}` : sub.name()
+        for (const token of [sub.name(), ...sub.aliases()]) candidates.push({ token, name })
+      }
+      suggestion = nearestCommand(failed.typed, candidates)
+    }
+  } catch {
+    // no suggestion: the attempt is still reported
+  }
+  client.recordUnknownCommand(suggestion, known)
+}
+
 /**
  * Wires automatic telemetry capture into a commander command tree:
  *
@@ -73,6 +145,10 @@ function isControlFlowExit(err: unknown): err is CommanderError {
  *   `--version` control-flow exits (see {@link isControlFlowExit}).
  * - Help usage is captured by wrapping the public, chainable
  *   `outputHelp` method.
+ * - A command that does not exist (commander's `commander.unknownCommand`
+ *   error) is reported with `Client.recordUnknownCommand` instead of as a
+ *   failed command: it carries only the nearest registered command, never
+ *   what was typed. The error is rethrown unchanged.
  *
  * Calls `program.exitOverride()`: without it, commander calls
  * `process.exit()` itself on `--help`, `--version`, or a command
@@ -129,7 +205,10 @@ export function instrumentCommander(
       return result
     } catch (err) {
       // --help/--version aren't command runs, same as in the cobra integration.
-      if (!isControlFlowExit(err)) {
+      if (err instanceof CommanderError && err.code === UNKNOWN_COMMAND_CODE) {
+        // A failed lookup is an attempt, not an invocation or an error.
+        recordUnknownCommand(program, client)
+      } else if (!isControlFlowExit(err)) {
         recordCommand(1)
         const error = err instanceof Error ? err : new Error(String(err))
         const classified = classify(error)

@@ -63,6 +63,11 @@ export const AttrConfigCustomizedCount = 'cli.config.customized_count'
  * `authState` option. Only on `cli.session.started`.
  */
 export const AttrAuthState = 'cli.auth.state'
+/**
+ * `Tier.Basic`+. On `cli.command.unknown` only: the nearest *known* command to
+ * a mistyped one, as a dotted `cli.command.name`. Never the typed text.
+ */
+export const AttrCommandSuggestion = 'cli.command.suggestion'
 /** `Tier.Basic`+. */
 export const AttrFlagNames = 'cli.flag.names'
 /** `Tier.Basic`+. */
@@ -114,6 +119,8 @@ export const EventCommandInvoked = 'cli.command.invoked'
 export const EventCommandCompleted = 'cli.command.completed'
 export const EventFeatureActivated = 'cli.feature.activated'
 export const EventHelpViewed = 'cli.help.viewed'
+/** An attempt to run a command that does not exist. Every tier; see `recordUnknownCommand`. */
+export const EventCommandUnknown = 'cli.command.unknown'
 export const EventErrorRaised = 'cli.error.raised'
 
 /**

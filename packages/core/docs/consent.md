@@ -34,20 +34,21 @@ names. Every taxonomy method still emits _something_ at this tier — an
 aggregate counter increment — so vendors get install/usage volume
 numbers even from users who've never made a choice.
 
-| Method                                          | What's emitted at Anonymous                                      |
-| ----------------------------------------------- | ---------------------------------------------------------------- |
-| `recordSessionStart`/`recordSessionEnd`         | `cli.sessions` counter increment only                            |
-| `recordCommandInvocation`                       | `cli.invocations` counter increment only                         |
-| `recordExitCode`                                | exit code, no command path                                       |
-| `recordLatency`                                 | duration, no command path                                        |
-| `recordHelpFlagUsage`                           | a bare "help was used" event, no command path                    |
-| `recordError`                                   | `cli.errors` counter increment by command; no category, no event |
-| `recordFeatureActivated`                        | nothing                                                          |
-| `recordCounter`                                 | `cli.counter` increment: name and optional label only            |
-| `recordDuration`                                | `cli.measure` timing: name and optional label only               |
-| `recordCommand` memory and CPU time             | nothing                                                          |
-| `recordSessionStart` size, startup, environment | nothing                                                          |
-| `recordSessionStart` config count, auth state   | nothing                                                          |
+| Method                                          | What's emitted at Anonymous                                       |
+| ----------------------------------------------- | ----------------------------------------------------------------- |
+| `recordSessionStart`/`recordSessionEnd`         | `cli.sessions` counter increment only                             |
+| `recordCommandInvocation`                       | `cli.invocations` counter increment only                          |
+| `recordExitCode`                                | exit code, no command path                                        |
+| `recordLatency`                                 | duration, no command path                                         |
+| `recordHelpFlagUsage`                           | a bare "help was used" event, no command path                     |
+| `recordError`                                   | `cli.errors` counter increment by command; no category, no event  |
+| `recordFeatureActivated`                        | nothing                                                           |
+| `recordCounter`                                 | `cli.counter` increment: name and optional label only             |
+| `recordDuration`                                | `cli.measure` timing: name and optional label only                |
+| `recordCommand` memory and CPU time             | nothing                                                           |
+| `recordSessionStart` size, startup, environment | nothing                                                           |
+| `recordSessionStart` config count, auth state   | nothing                                                           |
+| `recordUnknownCommand`                          | a bare `cli.command.unknown` event: no suggestion, no identifiers |
 
 ### Tier.Basic
 
@@ -158,6 +159,53 @@ Also adds:
   The `classify` option of `@getargvio/commander` and `@getargvio/yargs`
   may return `{ category, reason }` for this. Nothing is sent at
   `Tier.Anonymous`.
+
+### Unknown commands, at every tier
+
+`recordUnknownCommand(suggestion?, knownCommands?)` reports one attempt to run
+a command that does not exist. The `@getargvio/commander` and
+`@getargvio/yargs` integrations call it for you when the framework fails a
+command lookup; it replaces the failed-command and error records for that
+attempt, because an attempt is not an invocation. It is sent as the
+`cli.command.unknown` event.
+
+> **Warning: a mistyped command is arbitrary user input.** It can be a typo,
+> but also a pasted token, a path or a sentence. **No part of what the user
+> typed is ever sent, logged or stored, at any tier**: not the text, a
+> prefix, a hash, a length, or the flags and arguments that followed it. The
+> event has no attribute that could hold it, and its body is empty.
+
+| Tier        | What `recordUnknownCommand` sends                                           |
+| ----------- | --------------------------------------------------------------------------- |
+| `Anonymous` | `cli.command.unknown` with no attributes of its own: a bare attempt count   |
+| `Basic`+    | the same, plus `cli.command.suggestion` when there is a close known command |
+
+Next to those, the event carries only the resource attributes every signal
+has (CLI version, OS, architecture, CI, consent tier). It has no
+`cli.command.name`, flag names, session or install ID, or error attributes.
+
+- **`cli.command.suggestion`** is the nearest _known_ command, as a dotted
+  command name (`deploy.push`, the same string `cli.command.name` uses), at
+  most 128 bytes. It is never typed text: the integrations pass what the user
+  typed to `nearestCommand(typed, candidates)`, which compares it with the
+  commands the CLI registered and returns the name of one of them or nothing.
+  It only returns a command within an edit distance of 2 (1 for a word of up
+  to 3 characters), compared case-insensitively, never one picked because it
+  contains or is contained in the input; input over 64 characters is never
+  compared. With no close command the attempt is sent without a suggestion.
+- **Validated against the registered commands.** `recordUnknownCommand` only
+  sends a suggestion that is one of the `knownCommands` it is given, and
+  drops the rest (the attempt is still sent). With no `knownCommands`, no
+  suggestion is sent.
+- **Hidden commands** (commander `hidden`, yargs description `false`) are
+  never suggested.
+- **Tier gating** is in the client: the suggestion is added at `Tier.Basic`
+  and above only, and nothing here depends on the consent tier for privacy.
+  The server also strips it below `basic`.
+- The host CLI's behavior is unchanged: the same error, the same exit code.
+- If you call `recordUnknownCommand` yourself, pass a suggestion that came
+  out of your own command table, **never anything derived from what the
+  user typed**.
 
 ### Vendor counters, at every tier
 

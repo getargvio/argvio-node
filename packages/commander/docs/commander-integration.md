@@ -59,6 +59,28 @@ a chance to run. After instrumenting, **your own code owns the real
 process exit**: await `parseAsync()` and decide the exit code yourself
 based on whether it resolved or rejected.
 
+### Unknown commands
+
+When commander raises its `commander.unknownCommand` error, the integration
+reports the attempt with `Client.recordUnknownCommand` instead of recording a
+failed command and an error. The error is rethrown unchanged, so your CLI
+prints the same message and exits with the same code as before.
+
+What is sent is the fact of the attempt and, at `Tier.Basic`+, the nearest
+_registered_ command as a dotted name (`deploy.push`), never the typed text:
+the operand commander could not match is only used to find the closest
+command among the visible siblings at that point in the tree (names and
+aliases, hidden commands excluded), within a small edit distance. This does
+not depend on commander's own `showSuggestionAfterError`. See
+`packages/core/docs/consent.md` for the tiers.
+
+Like every error this integration sees, it needs `exitOverride()` to reach a
+command: `instrumentCommander` calls it on the program, but commander copies
+that setting to a subcommand only when the subcommand is created afterwards.
+Call `instrument` before defining your subcommands, or call `.exitOverride()`
+on the ones that exist already, or an unknown command below them exits
+before it can be reported.
+
 ### `--help`/`--version` are not errors
 
 With `exitOverride()` set, commander doesn't call `process.exit()` for
