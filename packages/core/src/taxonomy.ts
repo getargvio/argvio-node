@@ -29,6 +29,28 @@ export const AttrBinarySizeBytes = 'cli.binary.size_bytes'
  * running, in milliseconds. Only on `cli.session.started`.
  */
 export const AttrStartupDurationMs = 'cli.startup.duration_ms'
+/**
+ * `Tier.Basic`+. The user's shell from a fixed vocabulary (`bash`, `zsh`,
+ * `fish`, ...) or `other`, never a path. Only on `cli.session.started`.
+ */
+export const AttrShell = 'cli.shell'
+/**
+ * `Tier.Basic`+. The terminal emulator from a fixed vocabulary, `other` or
+ * `unknown`, never a raw environment value. Only on `cli.session.started`.
+ */
+export const AttrTerminal = 'cli.terminal'
+/**
+ * `Tier.Basic`+. Whether stdout is a terminal (true) or piped or redirected
+ * (false). Only on `cli.session.started`.
+ */
+export const AttrStdoutIsTty = 'cli.stdout.is_tty'
+/** `Tier.Basic`+. The language runtime, `node`. Only on `cli.session.started`. */
+export const AttrRuntimeName = 'cli.runtime.name'
+/**
+ * `Tier.Basic`+. The version of `cli.runtime.name` (`process.versions.node`).
+ * Only on `cli.session.started`.
+ */
+export const AttrRuntimeVersion = 'cli.runtime.version'
 /** `Tier.Basic`+. */
 export const AttrFlagNames = 'cli.flag.names'
 /** `Tier.Basic`+. */

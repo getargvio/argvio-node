@@ -11,6 +11,7 @@ import { resolveConfig } from './options.js'
 import { buildExporters } from './otlp.js'
 import { buildResource } from './resource.js'
 import { isDoNotTrackRequested } from './consentEnv.js'
+import { detectEnvironment } from './environment.js'
 import { Tier, tierAllows, tierToString, isValidTier, RESOURCE_ATTR_TIER } from './tier.js'
 import type { ErrorCategory } from './tier.js'
 import { ErrorCategory as ErrorCategoryValues, isValidErrorCategory } from './tier.js'
@@ -32,6 +33,11 @@ import {
   AttrMeasureLabel,
   AttrMeasureName,
   AttrPeakRssBytes,
+  AttrRuntimeName,
+  AttrRuntimeVersion,
+  AttrShell,
+  AttrStdoutIsTty,
+  AttrTerminal,
   AttrCpuTimeMs,
   AttrBinarySizeBytes,
   AttrStartupDurationMs,
@@ -354,6 +360,13 @@ export class Client {
    * the command runs, as the integrations do. And when running as a Node
    * single executable application, it carries the binary's size
    * (`cli.binary.size_bytes`). Either is omitted if unavailable, never 0.
+   *
+   * Also at `Tier.Basic`+, read locally from the environment with no
+   * subprocess: the shell (`cli.shell`) and terminal emulator
+   * (`cli.terminal`), each mapped to a small fixed vocabulary rather than
+   * sent raw; whether stdout is a TTY (`cli.stdout.is_tty`); and the runtime
+   * (`cli.runtime.name`, `cli.runtime.version`). Anything that can't be
+   * detected is omitted.
    */
   recordSessionStart(): void {
     safeRun(() => {
@@ -363,9 +376,19 @@ export class Client {
       const basic = tierAllows(this.tier, Tier.Basic)
       // Read now rather than in the queued job, which runs on a later tick.
       const startupMs = basic ? readStartupDurationMs() : undefined
+      const environment = basic ? detectEnvironment() : undefined
       this.queue.push(() => {
         const attrs = this.identityAttrs(sessionId)
         if (startupMs !== undefined) attrs[AttrStartupDurationMs] = startupMs
+        if (environment?.shell !== undefined) attrs[AttrShell] = environment.shell
+        if (environment?.terminal !== undefined) attrs[AttrTerminal] = environment.terminal
+        if (environment?.stdoutIsTty !== undefined) {
+          attrs[AttrStdoutIsTty] = environment.stdoutIsTty
+        }
+        if (environment?.runtimeName !== undefined && environment.runtimeVersion !== undefined) {
+          attrs[AttrRuntimeName] = environment.runtimeName
+          attrs[AttrRuntimeVersion] = environment.runtimeVersion
+        }
         if (basic) {
           const sizeBytes = readBinarySizeBytes()
           if (sizeBytes !== undefined) attrs[AttrBinarySizeBytes] = sizeBytes
