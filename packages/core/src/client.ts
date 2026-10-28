@@ -12,12 +12,16 @@ import { buildExporters } from './otlp.js'
 import { buildResource } from './resource.js'
 import { isDoNotTrackRequested } from './consentEnv.js'
 import { detectEnvironment } from './environment.js'
+import type { AuthState, Lazy } from './sessionFacts.js'
+import { resolveAuthState, resolveConfigCustomizedCount } from './sessionFacts.js'
 import { Tier, tierAllows, tierToString, isValidTier, RESOURCE_ATTR_TIER } from './tier.js'
 import type { ErrorCategory } from './tier.js'
 import { ErrorCategory as ErrorCategoryValues, isValidErrorCategory } from './tier.js'
 import {
   AttrActivationFeature,
+  AttrAuthState,
   AttrCommandName,
+  AttrConfigCustomizedCount,
   AttrCounterLabel,
   AttrCounterName,
   AttrDurationMs,
@@ -197,6 +201,8 @@ interface ClientParams {
   cliName?: string
   installIdPath?: string | undefined
   installMethod?: string | undefined
+  configCustomizedCount?: Lazy<number> | undefined
+  authState?: Lazy<AuthState> | undefined
   tracer?: Tracer
   disabled: boolean
   initError: Error | null
@@ -238,6 +244,8 @@ export class Client {
   private readonly cliName: string
   private readonly installIdPath: string | undefined
   private readonly installMethod: string | undefined
+  private readonly configCustomizedCount: Lazy<number> | undefined
+  private readonly authState: Lazy<AuthState> | undefined
   private installId: string | undefined
   private readonly activatedFeatures = new Set<string>()
   private readonly tracer: Tracer | undefined
@@ -271,6 +279,8 @@ export class Client {
     this.cliName = params.cliName ?? ''
     this.installIdPath = params.installIdPath
     this.installMethod = params.installMethod
+    this.configCustomizedCount = params.configCustomizedCount
+    this.authState = params.authState
     this.tracer = params.tracer
   }
 
@@ -367,6 +377,12 @@ export class Client {
    * sent raw; whether stdout is a TTY (`cli.stdout.is_tty`); and the runtime
    * (`cli.runtime.name`, `cli.runtime.version`). Anything that can't be
    * detected is omitted.
+   *
+   * Also at `Tier.Basic`+, the vendor-supplied `configCustomizedCount`
+   * (`cli.config.customized_count`) and `authState` (`cli.auth.state`)
+   * options, when set. A callback is evaluated here, once, and only at a tier
+   * that sends it; one that throws or returns an invalid value omits the
+   * attribute.
    */
   recordSessionStart(): void {
     safeRun(() => {
@@ -377,6 +393,10 @@ export class Client {
       // Read now rather than in the queued job, which runs on a later tick.
       const startupMs = basic ? readStartupDurationMs() : undefined
       const environment = basic ? detectEnvironment() : undefined
+      const configCustomizedCount = basic
+        ? resolveConfigCustomizedCount(this.configCustomizedCount)
+        : undefined
+      const authState = basic ? resolveAuthState(this.authState) : undefined
       this.queue.push(() => {
         const attrs = this.identityAttrs(sessionId)
         if (startupMs !== undefined) attrs[AttrStartupDurationMs] = startupMs
@@ -389,6 +409,10 @@ export class Client {
           attrs[AttrRuntimeName] = environment.runtimeName
           attrs[AttrRuntimeVersion] = environment.runtimeVersion
         }
+        if (configCustomizedCount !== undefined) {
+          attrs[AttrConfigCustomizedCount] = configCustomizedCount
+        }
+        if (authState !== undefined) attrs[AttrAuthState] = authState
         if (basic) {
           const sizeBytes = readBinarySizeBytes()
           if (sizeBytes !== undefined) attrs[AttrBinarySizeBytes] = sizeBytes
@@ -835,6 +859,8 @@ export function createClient(
       cliName,
       installIdPath: cfg.installIdPath,
       installMethod: cfg.installMethod,
+      configCustomizedCount: cfg.configCustomizedCount,
+      authState: cfg.authState,
       tracer: tracerProvider.getTracer(INSTRUMENTATION_NAME),
       disabled: false,
       initError: null,

@@ -14,7 +14,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   AttrActivationFeature,
+  AttrAuthState,
   AttrCommandName,
+  AttrConfigCustomizedCount,
   AttrDurationMs,
   AttrErrorMessage,
   AttrCounterLabel,
@@ -37,6 +39,7 @@ import {
   AttrStdoutIsTty,
   AttrTerminal,
   AttrStartupDurationMs,
+  AuthState,
   Client,
   ErrorCategory,
   createClient,
@@ -46,6 +49,7 @@ import {
   EventFeatureActivated,
   EventHelpViewed,
   EventSessionStarted,
+  MAX_CONFIG_CUSTOMIZED_COUNT,
   MEASURE_BUCKET_BOUNDARIES_MS,
   MetricCounter,
   MetricMeasure,
@@ -84,6 +88,7 @@ function capturingClient(
   tier: Tier,
   installIdPath = join(mkdtempSync(join(tmpdir(), 'argvio-')), 'id'),
   installMethod?: string,
+  extra: Record<string, unknown> = {},
 ) {
   const logs: LogRecord[] = []
   const spans: SpanRecord[] = []
@@ -94,6 +99,7 @@ function capturingClient(
     cliName: 'testcli',
     installIdPath,
     installMethod,
+    ...extra,
     disabled: false,
     initError: null,
     tier,
@@ -1105,5 +1111,170 @@ describe('recordDuration', () => {
     expect(point('scan.completed')?.value).toMatchObject({ count: 1, sum: 400_000 })
     expect(client.stats().queueOverflowDropped).toBe(0)
     await meterProvider.shutdown()
+  })
+})
+
+describe('session start config customization and auth state', () => {
+  const sessionKeys = [AttrConfigCustomizedCount, AttrAuthState]
+
+  async function sessionAttrs(tier: Tier, extra: Record<string, unknown>) {
+    const { client, event } = capturingClient(tier, undefined, undefined, extra)
+    client.recordSessionStart()
+    await client.flush(500)
+    return event(EventSessionStarted)?.attributes
+  }
+
+  it('uses the exact wire names and vocabulary the server allowlist expects', () => {
+    expect(AttrConfigCustomizedCount).toBe('cli.config.customized_count')
+    expect(AttrAuthState).toBe('cli.auth.state')
+    expect(Object.values(AuthState).sort()).toEqual(['anonymous', 'authenticated', 'unknown'])
+  })
+
+  it('sends both at Tier.Basic+, on the session start only', async () => {
+    for (const tier of [Tier.Basic, Tier.Full, Tier.OptIn]) {
+      const { client, logs, event } = capturingClient(tier, undefined, undefined, {
+        configCustomizedCount: 7,
+        authState: AuthState.Authenticated,
+      })
+      client.recordSessionStart()
+      client.recordCommandInvocation('testcli sub')
+      await client.flush(500)
+
+      const attrs = event(EventSessionStarted)?.attributes
+      expect(attrs?.[AttrConfigCustomizedCount]).toBe(7)
+      expect(attrs?.[AttrAuthState]).toBe('authenticated')
+      for (const log of logs.filter((l) => l.eventName !== EventSessionStarted)) {
+        for (const key of sessionKeys) expect(log.attributes).not.toHaveProperty(key)
+      }
+    }
+  })
+
+  it('sends neither at Tier.Anonymous, and never calls the callbacks', async () => {
+    const count = vi.fn(() => 3)
+    const auth = vi.fn(() => AuthState.Anonymous)
+    const { client, logs, event } = capturingClient(Tier.Anonymous, undefined, undefined, {
+      configCustomizedCount: count,
+      authState: auth,
+    })
+    client.recordSessionStart()
+    await client.flush(500)
+
+    expect(event(EventSessionStarted)).toBeDefined()
+    for (const log of logs) {
+      for (const key of sessionKeys) expect(log.attributes).not.toHaveProperty(key)
+    }
+    expect(count).not.toHaveBeenCalled()
+    expect(auth).not.toHaveBeenCalled()
+  })
+
+  it('omits both when the options are unset', async () => {
+    const attrs = await sessionAttrs(Tier.Basic, {})
+    for (const key of sessionKeys) expect(attrs).not.toHaveProperty(key)
+  })
+
+  it('evaluates callbacks once, when the session starts', async () => {
+    let count = 2
+    let auth: AuthState = AuthState.Unknown
+    const countFn = vi.fn(() => count)
+    const authFn = vi.fn(() => auth)
+    const { client, event } = capturingClient(Tier.Basic, undefined, undefined, {
+      configCustomizedCount: countFn,
+      authState: authFn,
+    })
+    expect(countFn).not.toHaveBeenCalled()
+    count = 5
+    auth = AuthState.Anonymous
+    client.recordSessionStart()
+    client.recordSessionStart()
+    await client.flush(500)
+
+    expect(countFn).toHaveBeenCalledTimes(1)
+    expect(authFn).toHaveBeenCalledTimes(1)
+    expect(event(EventSessionStarted)?.attributes[AttrConfigCustomizedCount]).toBe(5)
+    expect(event(EventSessionStarted)?.attributes[AttrAuthState]).toBe('anonymous')
+  })
+
+  it('accepts every auth state and zero customizations', async () => {
+    for (const state of Object.values(AuthState)) {
+      const attrs = await sessionAttrs(Tier.Basic, { authState: state, configCustomizedCount: 0 })
+      expect(attrs?.[AttrAuthState]).toBe(state)
+      expect(attrs?.[AttrConfigCustomizedCount]).toBe(0)
+    }
+  })
+
+  it('swallows a throwing callback, omits the attribute and still starts the session', async () => {
+    const boom = () => {
+      throw new Error('could not read credentials for alice@example.com')
+    }
+    const { client, event } = capturingClient(Tier.Basic, undefined, undefined, {
+      configCustomizedCount: boom,
+      authState: boom,
+    })
+    expect(() => client.recordSessionStart()).not.toThrow()
+    await client.flush(500)
+
+    const attrs = event(EventSessionStarted)?.attributes
+    expect(attrs).toBeDefined()
+    for (const key of sessionKeys) expect(attrs).not.toHaveProperty(key)
+    expect(client.stats().recoveredErrors).toBe(0)
+  })
+
+  it('keeps one fact when the other callback fails', async () => {
+    const attrs = await sessionAttrs(Tier.Basic, {
+      configCustomizedCount: () => {
+        throw new Error('nope')
+      },
+      authState: () => AuthState.Authenticated,
+    })
+    expect(attrs).not.toHaveProperty(AttrConfigCustomizedCount)
+    expect(attrs?.[AttrAuthState]).toBe('authenticated')
+  })
+
+  it('clamps and rounds the count into 0..MAX', async () => {
+    const cases: Array<[number, number]> = [
+      [-5, 0],
+      [-0.5, 0],
+      [3.9, 3],
+      [MAX_CONFIG_CUSTOMIZED_COUNT, MAX_CONFIG_CUSTOMIZED_COUNT],
+      [MAX_CONFIG_CUSTOMIZED_COUNT + 1, MAX_CONFIG_CUSTOMIZED_COUNT],
+      [Number.MAX_SAFE_INTEGER, MAX_CONFIG_CUSTOMIZED_COUNT],
+      [Infinity, -1],
+    ]
+    for (const [input, expected] of cases) {
+      const attrs = await sessionAttrs(Tier.Basic, { configCustomizedCount: input })
+      // Infinity is not a count at all: omitted rather than clamped.
+      if (expected === -1) expect(attrs).not.toHaveProperty(AttrConfigCustomizedCount)
+      else expect(attrs?.[AttrConfigCustomizedCount]).toBe(expected)
+    }
+  })
+
+  it('omits a count that is not a finite number', async () => {
+    for (const bad of [NaN, -Infinity, '12', null, {}, [3], true]) {
+      for (const source of [bad, () => bad]) {
+        const attrs = await sessionAttrs(Tier.Basic, { configCustomizedCount: source })
+        expect(attrs).not.toHaveProperty(AttrConfigCustomizedCount)
+      }
+    }
+  })
+
+  it('omits an auth state outside the vocabulary instead of echoing it', async () => {
+    for (const bad of ['alice@example.com', 'Authenticated', '', 'signed-in', 1, true, null, {}]) {
+      for (const source of [bad, () => bad]) {
+        const attrs = await sessionAttrs(Tier.Basic, { authState: source })
+        expect(attrs).not.toHaveProperty(AttrAuthState)
+      }
+    }
+  })
+
+  it('is passed through createClient options', async () => {
+    const client = createClient('key', 'testcli', '1.0.0', {
+      defaultTier: Tier.Basic,
+      installIdPath: '',
+      configCustomizedCount: () => 4,
+      authState: AuthState.Anonymous,
+    })
+    expect(client.initError).toBeNull()
+    client.recordSessionStart()
+    await client.shutdown(200)
   })
 })

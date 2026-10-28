@@ -1,6 +1,7 @@
 import { Tier } from './tier.js'
 import type { ConsentProvider } from './consent.js'
 import { defaultInstallIdPath } from './consentFile.js'
+import type { AuthState, Lazy } from './sessionFacts.js'
 
 export type Transport = 'http' | 'grpc'
 
@@ -81,6 +82,27 @@ export interface ClientOptions {
    * a value stamped in at build time. Omit to send nothing.
    */
   installMethod?: string
+  /**
+   * How many of the user's configuration keys differ from their defaults,
+   * reported on the session start event at `Tier.Basic`+. The SDK can't tell
+   * on its own, so the vendor supplies it: a number, or a callback evaluated
+   * once when `recordSessionStart` runs, for a count that is only known after
+   * the config is loaded. Only the count is ever sent, never key names or
+   * values. It is rounded down and clamped to 0..{@link MAX_CONFIG_CUSTOMIZED_COUNT};
+   * a callback that throws, or a value that isn't a finite number, means
+   * nothing is sent. Omit to send nothing.
+   */
+  configCustomizedCount?: Lazy<number>
+  /**
+   * Whether the user is signed in to the vendor's own service, reported on
+   * the session start event at `Tier.Basic`+. Use {@link AuthState}:
+   * `Authenticated`, `Anonymous` or `Unknown`. Pass a callback to resolve it
+   * late, after the credentials are read; it runs once when
+   * `recordSessionStart` runs. A callback that throws, or any other value,
+   * means nothing is sent. Never pass an account name, ID or token. Omit to
+   * send nothing.
+   */
+  authState?: Lazy<AuthState>
 }
 
 export interface ResolvedConfig {
@@ -100,6 +122,8 @@ export interface ResolvedConfig {
   resourceAttributes: Record<string, string>
   installIdPath: string | undefined
   installMethod: string | undefined
+  configCustomizedCount: Lazy<number> | undefined
+  authState: Lazy<AuthState> | undefined
 }
 
 /** The server's max_length for `cli.install.method`. */
@@ -139,5 +163,7 @@ export function resolveConfig(
         ? options.installIdPath || undefined
         : defaultInstallIdPath(cliName),
     installMethod: options.installMethod?.slice(0, MAX_INSTALL_METHOD_LENGTH) || undefined,
+    configCustomizedCount: options.configCustomizedCount,
+    authState: options.authState,
   }
 }
