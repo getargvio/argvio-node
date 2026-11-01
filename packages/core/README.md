@@ -76,13 +76,26 @@ await fetchRules()
 client.recordDuration('rules.fetch', performance.now() - start, { label: 'get' })
 ```
 
-> **Warning: counters and timings are accepted at the anonymous tier.**
-> They are sent at every tier, including `Anonymous` and in CI, with no
-> consent choice made. Names and labels must be fixed identifiers chosen in
+When one label isn't enough, declare a handle with up to three named
+dimensions (`MAX_DIMS`) and pass one value per key on each call; each is sent
+as a `cli.dim.<key>` attribute, and the server breaks the metric down by any
+of them:
+
+```ts
+const vulns = client.counter('vulns.found', { dims: ['severity', 'check'] })
+vulns.add(1, { severity: 'high', check: 'bola' })
+client.duration('scan.run', { dims: ['target'] }).record(elapsedMs, { target: 'openapi' })
+```
+
+> **Warning: counters, timings and their dimensions are accepted at the
+> anonymous tier.** They are sent at every tier, including `Anonymous` and in
+> CI, with no consent choice made. Names, labels and dimensions must be fixed
+> identifiers chosen in
 > code, **never user input, file paths, host names, URLs, tokens or
 > anything derived from them**. The SDK does not scrub them.
 
-Reasons, counter and timing names, and counter and timing labels must match
+Reasons, counter and timing names, counter and timing labels, and dimension
+keys and values must match
 `^[a-z0-9][a-z0-9._-]*$` and be at most 64 bytes; anything else is
 dropped, not scrubbed. A counter increment `n` must be a positive integer,
 and a duration `ms` a finite number greater than zero.

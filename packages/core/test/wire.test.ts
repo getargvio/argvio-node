@@ -22,6 +22,8 @@ import {
   AttrErrorMessage,
   AttrCounterLabel,
   AttrCounterName,
+  AttrDimPrefix,
+  MAX_DIMS,
   AttrMeasureLabel,
   AttrMeasureName,
   AttrErrorReason,
@@ -1408,5 +1410,111 @@ describe('recordUnknownCommand', () => {
       client.recordUnknownCommand('deploy', KNOWN)
     }).not.toThrow()
     await client.shutdown(100)
+  })
+})
+
+describe('counter and duration handles', () => {
+  it('sends one cli.dim.<key> per declared dimension, at every tier', async () => {
+    for (const tier of [Tier.Anonymous, Tier.Basic, Tier.Full, Tier.OptIn]) {
+      const { client, counterAdds, measureRecords } = capturingClient(tier)
+      const vulns = client.counter('vulns.found', { dims: ['severity', 'check'] })
+      vulns.add(2, { severity: 'high', check: 'bola' })
+      vulns.add(1, { check: 'jwt.alg-none', severity: 'low' })
+      client.duration('scan.run', { dims: ['target'] }).record(12.5, { target: 'openapi' })
+      await client.flush(500)
+
+      expect(AttrDimPrefix).toBe('cli.dim.')
+      expect(MAX_DIMS).toBe(3)
+      expect(counterAdds, String(tier)).toHaveLength(2)
+      expect(counterAdds[0]?.value).toBe(2)
+      expect(counterAdds[0]?.attributes).toMatchObject({
+        [AttrCounterName]: 'vulns.found',
+        'cli.dim.severity': 'high',
+        'cli.dim.check': 'bola',
+      })
+      expect(counterAdds[0]?.attributes).not.toHaveProperty(AttrCounterLabel)
+      expect(counterAdds[1]?.attributes).toMatchObject({
+        'cli.dim.severity': 'low',
+        'cli.dim.check': 'jwt.alg-none',
+      })
+      expect(measureRecords, String(tier)).toHaveLength(1)
+      expect(measureRecords[0]?.value).toBe(12.5)
+      expect(measureRecords[0]?.attributes).toMatchObject({
+        [AttrMeasureName]: 'scan.run',
+        'cli.dim.target': 'openapi',
+      })
+    }
+  })
+
+  it('carries only the tier, name and dimensions at Tier.Anonymous', async () => {
+    const { client, counterAdds } = capturingClient(Tier.Anonymous)
+    client.recordSessionStart()
+    client.counter('vulns.found', { dims: ['severity'] }).add(1, { severity: 'high' })
+    client.counter('scans').add(1)
+    await client.flush(500)
+    expect(Object.keys(counterAdds[0]?.attributes ?? {}).sort()).toEqual(
+      ['cli.analytics.tier', AttrCounterName, 'cli.dim.severity'].sort(),
+    )
+    expect(Object.keys(counterAdds[1]?.attributes ?? {}).sort()).toEqual(
+      ['cli.analytics.tier', AttrCounterName].sort(),
+    )
+  })
+
+  it('drops every call of an invalid handle', async () => {
+    const { client, counterAdds, measureRecords } = capturingClient(Tier.Anonymous)
+    const handles = [
+      client.counter('Bad'),
+      client.counter('ok', { dims: ['Sev'] }),
+      client.counter('ok', { dims: ['a', 'a'] }),
+      client.counter('ok', { dims: ['a', 'b', 'c', 'd'] }),
+      client.counter('ok', { dims: [''] }),
+      client.counter('ok', { dims: [7 as unknown as string] }),
+      client.counter('ok', { dims: 'severity' as unknown as string[] }),
+    ]
+    for (const h of handles) {
+      h.add(1)
+      h.add(1, { a: 'x' })
+      h.add(1, { a: 'x', b: 'y', c: 'z', d: 'w' })
+    }
+    client.duration('Bad').record(5)
+    await client.flush(500)
+    expect(counterAdds).toHaveLength(0)
+    expect(measureRecords).toHaveLength(0)
+  })
+
+  it('drops a call whose values do not match the declared keys, never sending it without one', async () => {
+    const { client, counterAdds, measureRecords } = capturingClient(Tier.Anonymous)
+    const vulns = client.counter('vulns.found', { dims: ['severity', 'check'] })
+    vulns.add(1)
+    vulns.add(1, { severity: 'high' })
+    vulns.add(1, { severity: 'high', check: 'bola', extra: 'x' })
+    vulns.add(1, { severity: 'high', target: 'bola' })
+    vulns.add(1, { severity: 'High', check: 'bola' })
+    vulns.add(1, { severity: '/home/alice', check: 'bola' })
+    vulns.add(1, { severity: 3 as unknown as string, check: 'bola' })
+    vulns.add(1, null as unknown as Record<string, string>)
+    vulns.add(0, { severity: 'high', check: 'bola' })
+    vulns.add(1.5, { severity: 'high', check: 'bola' })
+    const scan = client.duration('scan.run', { dims: ['target'] })
+    scan.record(0, { target: 'openapi' })
+    scan.record(NaN, { target: 'openapi' })
+    scan.record(5, {})
+    await client.flush(500)
+    expect(counterAdds).toHaveLength(0)
+    expect(measureRecords).toHaveLength(0)
+
+    vulns.add(1, { severity: 'high', check: 'x'.repeat(64) })
+    client.counter('max', { dims: ['a', 'b', 'c'] }).add(1, { a: '1', b: '2', c: '3' })
+    await client.flush(500)
+    expect(counterAdds).toHaveLength(2)
+  })
+
+  it('is a safe no-op on a disabled client', async () => {
+    const client = createClient('key', 'cli', '1.0.0', { disabled: true })
+    expect(() => {
+      client.counter('ok', { dims: ['a'] }).add(1, { a: 'x' })
+      client.duration('ok').record(5)
+    }).not.toThrow()
+    await client.shutdown(500)
   })
 })

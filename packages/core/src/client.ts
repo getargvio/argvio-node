@@ -25,6 +25,7 @@ import {
   AttrConfigCustomizedCount,
   AttrCounterLabel,
   AttrCounterName,
+  AttrDimPrefix,
   AttrDurationMs,
   AttrErrorMessage,
   AttrErrorReason,
@@ -60,6 +61,7 @@ import {
   MetricErrors,
   MetricMeasure,
   MAX_ACTIVATION_FEATURE_LENGTH,
+  MAX_DIMS,
   MEASURE_BUCKET_BOUNDARIES_MS,
   SpanCommandPrefix,
   commandName,
@@ -191,6 +193,38 @@ export interface DurationOptions {
    * identifier chosen in code, subject to the same rules as the timing name.
    */
   label?: string
+}
+
+/** Options for {@link Client.counter} and {@link Client.duration}. */
+export interface MetricHandleOptions {
+  /**
+   * The dimension keys every call passes a value for, at most
+   * {@link MAX_DIMS}: `['severity', 'check']`. Fixed identifiers chosen in
+   * code, subject to the same rules as the metric name.
+   */
+  dims?: readonly string[]
+}
+
+/** One value per dimension key declared on a handle. */
+export type DimValues = Readonly<Record<string, string>>
+
+/** A vendor-defined counter with named dimensions, from {@link Client.counter}. */
+export interface CounterHandle {
+  /**
+   * Adds `n` (a positive integer) with one value per declared dimension.
+   * A call with a missing, extra or invalid value is dropped. Never throws.
+   */
+  add(n: number, values?: DimValues): void
+}
+
+/** A vendor-defined timing with named dimensions, from {@link Client.duration}. */
+export interface DurationHandle {
+  /**
+   * Records `ms` (finite, greater than zero) with one value per declared
+   * dimension. A call with a missing, extra or invalid value is dropped.
+   * Never throws.
+   */
+  record(ms: number, values?: DimValues): void
 }
 
 /** One completed command, for {@link Client.recordCommand}. */
@@ -724,6 +758,73 @@ export class Client {
   }
 
   /**
+   * Returns a handle on the vendor counter `name`, for counts split by up
+   * to {@link MAX_DIMS} named dimensions ("vulnerabilities found, by
+   * severity and check"), which one label can't express:
+   *
+   * ```ts
+   * const vulns = client.counter('vulns.found', { dims: ['severity', 'check'] })
+   * vulns.add(1, { severity: 'high', check: 'bola' })
+   * ```
+   *
+   * Each value is sent as a `cli.dim.<key>` attribute on the same
+   * `cli.counter` metric as {@link recordCounter}, summed in memory per
+   * name and dimension values.
+   *
+   * **Dimensions are accepted at the anonymous tier**, like counters: the
+   * name, keys and values must be fixed identifiers chosen in code, **never
+   * user input, file paths, host names, URLs, tokens or anything derived
+   * from them**. Each must match `^[a-z0-9][a-z0-9._-]*$` and be at most 64
+   * bytes. A handle with an invalid or repeated key, or more than
+   * {@link MAX_DIMS} keys, drops every call; a call whose values don't
+   * match the declared keys exactly, or with an invalid value, is dropped
+   * rather than sent without it.
+   *
+   * Never throws, and does nothing on a disabled Client.
+   */
+  counter(name: string, options: MetricHandleOptions = {}): CounterHandle {
+    const keys = handleKeys(name, options)
+    return {
+      add: (n: number, values: DimValues = {}) => {
+        safeRun(() => {
+          if (keys === undefined || !this.gate(Tier.Anonymous)) return
+          if (typeof n !== 'number' || !Number.isSafeInteger(n) || n <= 0) return
+          const attrs = dimAttrs(keys, values)
+          if (attrs === undefined) return
+          this.productCounter?.add(n, { ...this.tierAttr(), [AttrCounterName]: name, ...attrs })
+        }, this.counters)
+      },
+    }
+  }
+
+  /**
+   * Returns a handle on the vendor timing `name`, for durations split by up
+   * to {@link MAX_DIMS} named dimensions:
+   *
+   * ```ts
+   * const scanTime = client.duration('scan.run', { dims: ['target'] })
+   * scanTime.record(elapsedMs, { target: 'openapi' })
+   * ```
+   *
+   * Sent on the same `cli.measure` histogram as {@link recordDuration}, with
+   * the same rules and warning as {@link counter}.
+   */
+  duration(name: string, options: MetricHandleOptions = {}): DurationHandle {
+    const keys = handleKeys(name, options)
+    return {
+      record: (ms: number, values: DimValues = {}) => {
+        safeRun(() => {
+          if (keys === undefined || !this.gate(Tier.Anonymous)) return
+          if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return
+          const attrs = dimAttrs(keys, values)
+          if (attrs === undefined) return
+          this.measureHist?.record(ms, { ...this.tierAttr(), [AttrMeasureName]: name, ...attrs })
+        }, this.counters)
+      },
+    }
+  }
+
+  /**
    * Returns an {@link OptInScope} if, and only if, this Client's resolved
    * consent tier is `Tier.OptIn`; otherwise returns `undefined`. There is
    * no other way to reach raw error detail (message, stack trace)
@@ -938,4 +1039,40 @@ export function createClient(
   } catch (err) {
     return disabledClient(toError(err))
   }
+}
+
+/**
+ * Validates a handle's name and dimension keys once; undefined drops every
+ * call of the handle.
+ */
+function handleKeys(
+  name: string,
+  options: MetricHandleOptions | undefined,
+): readonly string[] | undefined {
+  try {
+    if (!isValidIdentifier(name)) return undefined
+    const keys = [...(options?.dims ?? [])]
+    if (keys.length > MAX_DIMS) return undefined
+    if (new Set(keys).size !== keys.length) return undefined
+    if (!keys.every((k) => isValidIdentifier(k))) return undefined
+    return keys
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Builds the cli.dim.<key> attributes of one call, or undefined when its
+ * values don't match the declared keys exactly or one is invalid.
+ */
+function dimAttrs(keys: readonly string[], values: DimValues | undefined): Attributes | undefined {
+  const given = values ?? {}
+  if (typeof given !== 'object' || Object.keys(given).length !== keys.length) return undefined
+  const attrs: Attributes = {}
+  for (const key of keys) {
+    const value = Object.prototype.hasOwnProperty.call(given, key) ? given[key] : undefined
+    if (!isValidIdentifier(value)) return undefined
+    attrs[AttrDimPrefix + key] = value
+  }
+  return attrs
 }
