@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/getargvio/argvio-node/compare/argvio-v0.6.0...argvio-v0.7.0) (2026-11-02)
+
+
+### Features
+
+* attach the install id to vendor metrics at basic tier ([43503f7](https://github.com/getargvio/argvio-node/commit/43503f7080b7d87b6593256afe69de2dbe163329))
+* attach the install id to vendor metrics at basic tier ([fc5f478](https://github.com/getargvio/argvio-node/commit/fc5f478074a50ed88ea73d24f22a7df3d6785e5b))
+* per-run value distributions (cli.value) ([9e80de9](https://github.com/getargvio/argvio-node/commit/9e80de941ab492c5927a2908c8b3719f6c7cf534))
+* per-run value distributions (cli.value) ([274bbda](https://github.com/getargvio/argvio-node/commit/274bbdaf5507950ff8d6a76214c22a21be16e7b0))
+* typed metric handles with dimensions ([db6aefe](https://github.com/getargvio/argvio-node/commit/db6aefe48f6324fb4b16beabdfd960395597f4d9))
+* typed metric handles with dimensions ([a92d5e4](https://github.com/getargvio/argvio-node/commit/a92d5e477836c2184059bd27a3c254d7cc352629))
+
 ## [0.6.0](https://github.com/getargvio/argvio-node/compare/argvio-v0.5.0...argvio-v0.6.0) (2026-10-28)
 
 
