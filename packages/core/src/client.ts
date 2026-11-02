@@ -48,6 +48,8 @@ import {
   AttrBinarySizeBytes,
   AttrStartupDurationMs,
   AttrSessionId,
+  AttrValueName,
+  AttrValueUnit,
   EventCommandCompleted,
   EventCommandInvoked,
   EventCommandUnknown,
@@ -60,9 +62,12 @@ import {
   MetricCounter,
   MetricErrors,
   MetricMeasure,
+  MetricValue,
   MAX_ACTIVATION_FEATURE_LENGTH,
   MAX_DIMS,
   MEASURE_BUCKET_BOUNDARIES_MS,
+  VALUE_BUCKET_BOUNDARIES,
+  VALUE_UNITS,
   SpanCommandPrefix,
   commandName,
   isValidIdentifier,
@@ -197,6 +202,8 @@ export interface DurationOptions {
 
 /** Options for {@link Client.counter} and {@link Client.duration}. */
 export interface MetricHandleOptions {
+  /** What a {@link Client.value} counts: `'1'` (default), `'By'` or `'%'`. Ignored by other handles. */
+  unit?: string
   /**
    * The dimension keys every call passes a value for, at most
    * {@link MAX_DIMS}: `['severity', 'check']`. Fixed identifiers chosen in
@@ -225,6 +232,16 @@ export interface DurationHandle {
    * Never throws.
    */
   record(ms: number, values?: DimValues): void
+}
+
+/** A vendor-defined per-run value with named dimensions, from {@link Client.value}. */
+export interface ValueHandle {
+  /**
+   * Records `v` for one run (finite, not negative; zero is valid and
+   * expected) with one value per declared dimension. A call with a
+   * missing, extra or invalid value is dropped. Never throws.
+   */
+  record(v: number, values?: DimValues): void
 }
 
 /** One completed command, for {@link Client.recordCommand}. */
@@ -262,6 +279,7 @@ interface ClientParams {
   errorEventsCounter?: Counter
   productCounter?: Counter
   measureHist?: Histogram
+  valueHist?: Histogram
 }
 
 /**
@@ -303,6 +321,7 @@ export class Client {
   private readonly errorEventsCounter: Counter | undefined
   private readonly productCounter: Counter | undefined
   private readonly measureHist: Histogram | undefined
+  private readonly valueHist: Histogram | undefined
 
   /** @internal use {@link createClient} */
   constructor(params: ClientParams) {
@@ -320,6 +339,7 @@ export class Client {
     this.errorEventsCounter = params.errorEventsCounter
     this.productCounter = params.productCounter
     this.measureHist = params.measureHist
+    this.valueHist = params.valueHist
     this.cliName = params.cliName ?? ''
     this.installIdPath = params.installIdPath
     this.installMethod = params.installMethod
@@ -825,6 +845,45 @@ export class Client {
   }
 
   /**
+   * Returns a handle on the vendor value `name`: a quantity recorded once
+   * per run, such as findings per scan, operations scanned or spec size,
+   * which a counter's running total loses. Sent as the `cli.value`
+   * histogram, so the server keeps its distribution: percentiles, mean and
+   * the hit rate, the share of runs that recorded more than zero.
+   *
+   * ```ts
+   * const perScan = client.value('scan.findings', { dims: ['severity'] })
+   * perScan.record(0, { severity: 'critical' }) // zeros matter
+   * ```
+   *
+   * **Record zeros**: a run that records nothing isn't counted at all.
+   * Accepted at the anonymous tier, with the same rules and warning as
+   * {@link counter}; `unit` must be `'1'`, `'By'` or `'%'`, or every call
+   * is dropped.
+   */
+  value(name: string, options: MetricHandleOptions = {}): ValueHandle {
+    let keys = handleKeys(name, options)
+    const unit = options?.unit ?? '1'
+    if (!(VALUE_UNITS as readonly string[]).includes(unit)) keys = undefined
+    return {
+      record: (v: number, values: DimValues = {}) => {
+        safeRun(() => {
+          if (keys === undefined || !this.gate(Tier.Anonymous)) return
+          if (typeof v !== 'number' || !Number.isFinite(v) || v < 0) return
+          const attrs = dimAttrs(keys, values)
+          if (attrs === undefined) return
+          this.valueHist?.record(v, {
+            ...this.tierAttr(),
+            [AttrValueName]: name,
+            [AttrValueUnit]: unit,
+            ...attrs,
+          })
+        }, this.counters)
+      },
+    }
+  }
+
+  /**
    * Returns an {@link OptInScope} if, and only if, this Client's resolved
    * consent tier is `Tier.OptIn`; otherwise returns `undefined`. There is
    * no other way to reach raw error detail (message, stack trace)
@@ -1034,6 +1093,11 @@ export function createClient(
         unit: 'ms',
         description: 'Vendor-defined timings, by fixed name and optional label.',
         advice: { explicitBucketBoundaries: [...MEASURE_BUCKET_BOUNDARIES_MS] },
+      }),
+      valueHist: meter.createHistogram(MetricValue, {
+        unit: '1',
+        description: 'Vendor-defined per-run values, by fixed name and dimensions.',
+        advice: { explicitBucketBoundaries: [...VALUE_BUCKET_BOUNDARIES] },
       }),
     })
   } catch (err) {

@@ -298,6 +298,17 @@ stack trace. This is deliberate: it should be structurally impossible
 for a `recordError` call site written against a lower tier to
 accidentally leak detail, not just a runtime check.
 
+### Vendor values, at every tier
+
+`client.value(name, { dims, unit })` returns a handle that records a
+per-run quantity on the `cli.value` histogram (fixed buckets 0, 1, 2, 5, 10,
+20, 50, 100, 200, 500, 1000, 5000, 10000, 100000, the same as the Go SDK),
+with `cli.value.name`, `cli.value.unit` (`1`, `By` or `%`) and its
+dimensions. Same tier, rules and warning as counters: sent at every tier,
+names, keys and values must be fixed identifiers from code. A negative or
+non-finite value, or an unknown unit, drops the call; zero is valid and
+should be recorded.
+
 ### Dimensions, at every tier
 
 `client.counter(name, { dims })` and `client.duration(name, { dims })` return

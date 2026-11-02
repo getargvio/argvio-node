@@ -87,6 +87,16 @@ vulns.add(1, { severity: 'high', check: 'bola' })
 client.duration('scan.run', { dims: ['target'] }).record(elapsedMs, { target: 'openapi' })
 ```
 
+`client.value` records a quantity once per run (findings per scan, spec
+size), sent as the `cli.value` histogram so the server keeps its
+distribution and the share of runs that recorded more than zero. Record
+zeros too; `unit` is `'1'` (default), `'By'` or `'%'`:
+
+```ts
+const perScan = client.value('scan.findings', { dims: ['severity'] })
+perScan.record(0, { severity: 'critical' })
+```
+
 > **Warning: counters, timings and their dimensions are accepted at the
 > anonymous tier.** They are sent at every tier, including `Anonymous` and in
 > CI, with no consent choice made. Names, labels and dimensions must be fixed

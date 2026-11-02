@@ -24,6 +24,10 @@ import {
   AttrCounterName,
   AttrDimPrefix,
   MAX_DIMS,
+  AttrValueName,
+  AttrValueUnit,
+  MetricValue,
+  VALUE_BUCKET_BOUNDARIES,
   AttrMeasureLabel,
   AttrMeasureName,
   AttrErrorReason,
@@ -99,6 +103,7 @@ function capturingClient(
   const errorCounts: MetricAdd[] = []
   const counterAdds: MetricAdd[] = []
   const measureRecords: MetricAdd[] = []
+  const valueRecords: MetricAdd[] = []
   const client = new Client({
     cliName: 'testcli',
     installIdPath,
@@ -117,6 +122,9 @@ function capturingClient(
     },
     measureHist: {
       record: (value: number, attributes: Attributes) => measureRecords.push({ value, attributes }),
+    },
+    valueHist: {
+      record: (value: number, attributes: Attributes) => valueRecords.push({ value, attributes }),
     },
     logger: {
       emit: (rec: { eventName?: string; attributes?: Attributes }) => {
@@ -139,7 +147,7 @@ function capturingClient(
     },
   } as unknown as ConstructorParameters<typeof Client>[0])
   const event = (name: string) => logs.find((l) => l.eventName === name)
-  return { client, logs, spans, errorCounts, counterAdds, measureRecords, event }
+  return { client, logs, spans, errorCounts, counterAdds, measureRecords, valueRecords, event }
 }
 
 describe('wire format', () => {
@@ -1516,5 +1524,87 @@ describe('counter and duration handles', () => {
       client.duration('ok').record(5)
     }).not.toThrow()
     await client.shutdown(500)
+  })
+})
+
+describe('value handle', () => {
+  it('sends a cli.value with its unit and dimensions, zeros included, at every tier', async () => {
+    for (const tier of [Tier.Anonymous, Tier.Basic, Tier.Full, Tier.OptIn]) {
+      const { client, valueRecords } = capturingClient(tier)
+      const perScan = client.value('scan.findings', { dims: ['severity'] })
+      perScan.record(0, { severity: 'critical' })
+      perScan.record(3, { severity: 'high' })
+      client.value('spec.size', { unit: 'By' }).record(2048)
+      await client.flush(500)
+
+      expect(MetricValue).toBe('cli.value')
+      expect(valueRecords, String(tier)).toHaveLength(3)
+      expect(valueRecords[0]).toMatchObject({
+        value: 0,
+        attributes: {
+          [AttrValueName]: 'scan.findings',
+          [AttrValueUnit]: '1',
+          'cli.dim.severity': 'critical',
+        },
+      })
+      expect(valueRecords[2]?.attributes).toMatchObject({
+        [AttrValueName]: 'spec.size',
+        [AttrValueUnit]: 'By',
+      })
+    }
+  })
+
+  it('drops invalid values, units and dimension values', async () => {
+    const { client, valueRecords } = capturingClient(Tier.Anonymous)
+    const v = client.value('ok', { dims: ['severity'] })
+    for (const x of [-1, NaN, Infinity, '3' as unknown as number]) v.record(x, { severity: 'high' })
+    v.record(1)
+    v.record(1, { severity: 'High' })
+    client.value('ok', { unit: 'ms' }).record(1)
+    client.value('Bad').record(1)
+    v.record(1, { severity: 'high' })
+    await client.flush(500)
+    expect(valueRecords).toHaveLength(1)
+  })
+
+  it('is a safe no-op on a disabled client', async () => {
+    const client = createClient('key', 'cli', '1.0.0', { disabled: true })
+    expect(() => client.value('ok').record(1)).not.toThrow()
+    await client.shutdown(500)
+  })
+
+  it("reaches the metric pipeline with the server's exact bounds", async () => {
+    const exporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE)
+    const meterProvider = new MeterProvider({
+      readers: [new PeriodicExportingMetricReader({ exporter, exportIntervalMillis: 3_600_000 })],
+    })
+    const client = new Client({
+      cliName: 'testcli',
+      disabled: false,
+      initError: null,
+      tier: Tier.Anonymous,
+      queueSize: 10,
+      shutdownTimeoutMs: 100,
+      valueHist: meterProvider.getMeter('test').createHistogram(MetricValue, {
+        unit: '1',
+        advice: { explicitBucketBoundaries: [...VALUE_BUCKET_BOUNDARIES] },
+      }),
+    } as unknown as ConstructorParameters<typeof Client>[0])
+    // schema/allowlist/v1.yaml explicit_bounds of cli.value in getargvio/argvio.
+    expect(VALUE_BUCKET_BOUNDARIES).toEqual([
+      0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 5000, 10000, 100000,
+    ])
+    const v = client.value('scan.findings')
+    for (const x of [0, 0, 1, 40]) v.record(x)
+    await meterProvider.forceFlush()
+    const metrics = exporter.getMetrics().flatMap((rm) => rm.scopeMetrics.flatMap((s) => s.metrics))
+    const point = metrics[0]?.dataPoints[0]
+    expect(point?.value).toMatchObject({
+      count: 4,
+      buckets: {
+        boundaries: [...VALUE_BUCKET_BOUNDARIES],
+        counts: [2, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+      },
+    })
   })
 })
