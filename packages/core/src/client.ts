@@ -309,6 +309,7 @@ export class Client {
   private readonly configCustomizedCount: Lazy<number> | undefined
   private readonly authState: Lazy<AuthState> | undefined
   private installId: string | undefined
+  private installIdLoading = false
   private readonly activatedFeatures = new Set<string>()
   private readonly tracer: Tracer | undefined
 
@@ -402,6 +403,34 @@ export class Client {
     return this.sessionId
   }
 
+  /** Reads or creates the install ID once. May touch the file system: call it from a queued job. */
+  private loadInstallId(): string {
+    this.installId ??= loadOrCreateInstallId(this.installIdPath)
+    return this.installId
+  }
+
+  /**
+   * The install ID attribute for a vendor metric data point (counter,
+   * duration, value), so the server can count the installs a metric
+   * reached: only at `Tier.Basic` and above, and only once the ID is
+   * loaded. Metric calls run on the caller's stack, so loading is never done
+   * here: the first call queues it, and data points recorded before it
+   * finishes go without it, which the server reports as lower coverage.
+   */
+  private metricInstallAttrs(): Attributes {
+    if (!tierAllows(this.tier, Tier.Basic)) return {}
+    if (this.installId !== undefined) {
+      return this.installId ? { [AttrInstallId]: this.installId } : {}
+    }
+    if (!this.installIdLoading) {
+      this.installIdLoading = true
+      this.queue.push(() => {
+        this.loadInstallId()
+      })
+    }
+    return {}
+  }
+
   /**
    * The session and install ID attributes for a record, empty below
    * `Tier.Basic`. May read or create the install ID file, so call it from
@@ -411,8 +440,8 @@ export class Client {
     const attrs: Attributes = {}
     if (sessionId) attrs[AttrSessionId] = sessionId
     if (tierAllows(this.tier, Tier.Basic)) {
-      this.installId ??= loadOrCreateInstallId(this.installIdPath)
-      if (this.installId) attrs[AttrInstallId] = this.installId
+      const id = this.loadInstallId()
+      if (id) attrs[AttrInstallId] = id
     }
     return attrs
   }
@@ -732,7 +761,7 @@ export class Client {
       // Straight into the OTel counter, not the job queue: it sums per
       // attribute set in memory, so a hot loop neither allocates a record
       // per call nor overflows the queue.
-      this.productCounter?.add(n, attrs)
+      this.productCounter?.add(n, { ...attrs, ...this.metricInstallAttrs() })
     }, this.counters)
   }
 
@@ -773,7 +802,7 @@ export class Client {
       if (label !== undefined) attrs[AttrMeasureLabel] = label
       // Straight into the OTel histogram, not the job queue, for the same
       // reason as recordCounter: it aggregates per attribute set in memory.
-      this.measureHist?.record(ms, attrs)
+      this.measureHist?.record(ms, { ...attrs, ...this.metricInstallAttrs() })
     }, this.counters)
   }
 
@@ -811,7 +840,12 @@ export class Client {
           if (typeof n !== 'number' || !Number.isSafeInteger(n) || n <= 0) return
           const attrs = dimAttrs(keys, values)
           if (attrs === undefined) return
-          this.productCounter?.add(n, { ...this.tierAttr(), [AttrCounterName]: name, ...attrs })
+          this.productCounter?.add(n, {
+            ...this.tierAttr(),
+            [AttrCounterName]: name,
+            ...attrs,
+            ...this.metricInstallAttrs(),
+          })
         }, this.counters)
       },
     }
@@ -838,7 +872,12 @@ export class Client {
           if (typeof ms !== 'number' || !Number.isFinite(ms) || ms <= 0) return
           const attrs = dimAttrs(keys, values)
           if (attrs === undefined) return
-          this.measureHist?.record(ms, { ...this.tierAttr(), [AttrMeasureName]: name, ...attrs })
+          this.measureHist?.record(ms, {
+            ...this.tierAttr(),
+            [AttrMeasureName]: name,
+            ...attrs,
+            ...this.metricInstallAttrs(),
+          })
         }, this.counters)
       },
     }
@@ -877,6 +916,7 @@ export class Client {
             [AttrValueName]: name,
             [AttrValueUnit]: unit,
             ...attrs,
+            ...this.metricInstallAttrs(),
           })
         }, this.counters)
       },
