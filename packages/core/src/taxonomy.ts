@@ -160,6 +160,30 @@ export const MEASURE_BUCKET_BOUNDARIES_MS: readonly number[] = [
   1, 5, 10, 50, 100, 500, 1000, 5000, 10000, 60000, 300000,
 ]
 
+/** Unit: 1. A vendor-defined per-run value, see {@link Client.value}. */
+export const MetricValue = 'cli.value'
+
+/**
+ * Every tier. The name of a vendor-defined per-run value, a fixed identifier
+ * chosen in code. Sent on `cli.value`.
+ */
+export const AttrValueName = 'cli.value.name'
+/** Every tier. What a `cli.value` counts: `1`, `By` or `%`. */
+export const AttrValueUnit = 'cli.value.unit'
+
+/** Units a value may have. Time goes to {@link Client.duration} instead. */
+export const VALUE_UNITS = ['1', 'By', '%'] as const
+export type ValueUnit = (typeof VALUE_UNITS)[number]
+
+/**
+ * Bucket boundaries of the `cli.value` histogram, the server's exact bounds,
+ * the same as the Go SDK's. The first bucket, up to 0, counts the runs that
+ * recorded nothing: the server's hit rate comes from it.
+ */
+export const VALUE_BUCKET_BOUNDARIES: readonly number[] = [
+  0, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 5000, 10000, 100000,
+]
+
 /** The server's max_length for `cli.command.name`. */
 const MAX_COMMAND_NAME_LENGTH = 128
 

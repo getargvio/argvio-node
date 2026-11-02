@@ -7,6 +7,7 @@ export type {
   DimValues,
   CounterHandle,
   DurationHandle,
+  ValueHandle,
 } from './client.js'
 
 export type { ClientOptions, Transport } from './options.js'
@@ -74,6 +75,11 @@ export {
   AttrMeasureLabel,
   AttrDimPrefix,
   MAX_DIMS,
+  AttrValueName,
+  AttrValueUnit,
+  MetricValue,
+  VALUE_BUCKET_BOUNDARIES,
+  VALUE_UNITS,
   AttrErrorMessage,
   AttrErrorStack,
   EventSessionStarted,
