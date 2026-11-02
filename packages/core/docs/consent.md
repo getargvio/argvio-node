@@ -45,6 +45,7 @@ numbers even from users who've never made a choice.
 | `recordFeatureActivated`                        | nothing                                                           |
 | `recordCounter`                                 | `cli.counter` increment: name and optional label only             |
 | `recordDuration`                                | `cli.measure` timing: name and optional label only                |
+| `counter(...).add` / `duration(...).record`     | the same metrics, with `cli.dim.<key>` dimensions                 |
 | `recordCommand` memory and CPU time             | nothing                                                           |
 | `recordSessionStart` size, startup, environment | nothing                                                           |
 | `recordSessionStart` config count, auth state   | nothing                                                           |
@@ -296,6 +297,36 @@ function anywhere in this package that accepts a raw error message or
 stack trace. This is deliberate: it should be structurally impossible
 for a `recordError` call site written against a lower tier to
 accidentally leak detail, not just a runtime check.
+
+### Dimensions, at every tier
+
+`client.counter(name, { dims })` and `client.duration(name, { dims })` return
+handles whose calls add one `cli.dim.<key>` attribute per declared key, on
+the same `cli.counter` and `cli.measure` metrics (e.g. "vulnerabilities
+found, by severity and check"):
+
+```ts
+const vulns = client.counter('vulns.found', { dims: ['severity', 'check'] })
+vulns.add(1, { severity: 'high', check: 'bola' })
+```
+
+> **Warning: dimensions are accepted at the anonymous tier**, like the
+> counters and timings they split. Keys and values must be fixed identifiers
+> chosen in code, **never user input, file paths, host names, URLs, tokens or
+> anything derived from them**. The SDK does not scrub them.
+
+| Tier        | What a handle adds                         |
+| ----------- | ------------------------------------------ |
+| `Anonymous` | `cli.dim.<key>` per declared key, no label |
+| `Basic`+    | the same                                   |
+
+- At most `MAX_DIMS` (3) keys per handle. Keys and values must match
+  `^[a-z0-9][a-z0-9._-]*$` and be at most 64 bytes.
+- A handle with an invalid or repeated key, or too many, drops every call. A
+  call whose values don't match the declared keys exactly, or with an
+  invalid value, is dropped, never sent without it.
+- The server caps the distinct values per key (`public.max_dim_values_per_key`)
+  and stores new ones past the cap as `other`.
 
 ## What's never captured, at any tier
 

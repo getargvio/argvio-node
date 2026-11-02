@@ -1,5 +1,13 @@
 export { Client, OptInScope, createClient } from './client.js'
-export type { CommandResult, CounterOptions, DurationOptions } from './client.js'
+export type {
+  CommandResult,
+  CounterOptions,
+  DurationOptions,
+  MetricHandleOptions,
+  DimValues,
+  CounterHandle,
+  DurationHandle,
+} from './client.js'
 
 export type { ClientOptions, Transport } from './options.js'
 export { AuthState, isValidAuthState, MAX_CONFIG_CUSTOMIZED_COUNT } from './sessionFacts.js'
@@ -64,6 +72,8 @@ export {
   AttrCounterLabel,
   AttrMeasureName,
   AttrMeasureLabel,
+  AttrDimPrefix,
+  MAX_DIMS,
   AttrErrorMessage,
   AttrErrorStack,
   EventSessionStarted,

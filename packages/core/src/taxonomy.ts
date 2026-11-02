@@ -112,6 +112,18 @@ export const AttrMeasureName = 'cli.measure.name'
  * series, chosen in code. Sent on `cli.measure`.
  */
 export const AttrMeasureLabel = 'cli.measure.label'
+/**
+ * Every tier. Starts the dimension attributes of a `cli.counter` or
+ * `cli.measure` data point, one per key declared on a handle:
+ * `cli.dim.severity`. See {@link Client.counter}.
+ */
+export const AttrDimPrefix = 'cli.dim.'
+/**
+ * How many dimensions a counter or duration handle may declare. The server
+ * rejects data points with more than its `public.max_metric_dims` (3 by
+ * default), so a handle can't declare more than that default.
+ */
+export const MAX_DIMS = 3
 
 /** Log event names. */
 export const EventSessionStarted = 'cli.session.started'
