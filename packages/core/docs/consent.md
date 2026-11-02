@@ -215,7 +215,8 @@ has (CLI version, OS, architecture, CI, consent tier). It has no
 metric with two attributes, `cli.counter.name` and, if given,
 `cli.counter.label`, next to the command-independent resource attributes
 every signal carries (CLI version, OS, architecture, CI). It carries no
-session or install ID, and no command path.
+session ID and no command path; at `Basic` and above it carries the install
+ID, so the server can count the installs a metric reached.
 
 > **Warning: counters are accepted at the anonymous tier.** `recordCounter`
 > sends at every tier, including `Tier.Anonymous` and CI, with no consent
@@ -226,7 +227,7 @@ session or install ID, and no command path.
 | Tier        | What `recordCounter` sends                             |
 | ----------- | ------------------------------------------------------ |
 | `Anonymous` | `cli.counter`: `cli.counter.name`, `cli.counter.label` |
-| `Basic`+    | the same; counters add nothing at a higher tier        |
+| `Basic`+    | the same, plus `cli.install_id` (for reach)            |
 
 - `name` and `label` must each match `^[a-z0-9][a-z0-9._-]*$` and be at
   most 64 bytes. An increment with an invalid name or label is dropped
@@ -247,8 +248,8 @@ session or install ID, and no command path.
 milliseconds (e.g. "rules fetch time, by HTTP verb"). It is sent as the
 `cli.measure` histogram with two attributes, `cli.measure.name` and, if
 given, `cli.measure.label`, next to the same command-independent resource
-attributes as counters. It carries no session or install ID, and no
-command path.
+attributes as counters. It carries no session ID and no command path; at
+`Basic` and above it carries the install ID, as counters do.
 
 > **Warning: timings are accepted at the anonymous tier.** `recordDuration`
 > sends at every tier, including `Tier.Anonymous` and CI, with no consent
@@ -259,7 +260,7 @@ command path.
 | Tier        | What `recordDuration` sends                            |
 | ----------- | ------------------------------------------------------ |
 | `Anonymous` | `cli.measure`: `cli.measure.name`, `cli.measure.label` |
-| `Basic`+    | the same; timings add nothing at a higher tier         |
+| `Basic`+    | the same, plus `cli.install_id` (for reach)            |
 
 - `name` and `label` must each match `^[a-z0-9][a-z0-9._-]*$` and be at
   most 64 bytes. A timing with an invalid name or label is dropped
@@ -329,13 +330,16 @@ vulns.add(1, { severity: 'high', check: 'bola' })
 | Tier        | What a handle adds                         |
 | ----------- | ------------------------------------------ |
 | `Anonymous` | `cli.dim.<key>` per declared key, no label |
-| `Basic`+    | the same                                   |
+| `Basic`+    | the same, plus `cli.install_id`            |
 
 - At most `MAX_DIMS` (3) keys per handle. Keys and values must match
   `^[a-z0-9][a-z0-9._-]*$` and be at most 64 bytes.
 - A handle with an invalid or repeated key, or too many, drops every call. A
   call whose values don't match the declared keys exactly, or with an
   invalid value, is dropped, never sent without it.
+- The install ID is loaded in the background on the first metric call, so
+  the first data points of a process may go without it; the server reports
+  that as lower coverage.
 - The server caps the distinct values per key (`public.max_dim_values_per_key`)
   and stores new ones past the cap as `other`.
 

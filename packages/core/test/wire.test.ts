@@ -1608,3 +1608,51 @@ describe('value handle', () => {
     })
   })
 })
+
+describe('install id on vendor metrics', () => {
+  const recordAll = (client: Client) => {
+    client.recordCounter('plain.counter', 1)
+    client.recordDuration('plain.duration', 5)
+    client.counter('dim.counter', { dims: ['a'] }).add(1, { a: 'x' })
+    client.duration('dim.duration').record(5)
+    client.value('dim.value').record(0)
+  }
+
+  it('is attached at Tier.Basic and above, once loaded', async () => {
+    for (const tier of [Tier.Basic, Tier.Full, Tier.OptIn]) {
+      const { client, counterAdds, measureRecords, valueRecords, event } = capturingClient(tier)
+      client.recordSessionStart()
+      await client.flush(500)
+      recordAll(client)
+      await client.flush(500)
+      const id = event(EventSessionStarted)?.attributes[AttrInstallId]
+      expect(id).toMatch(/^[0-9a-f-]{36}$/)
+      for (const rec of [...counterAdds, ...measureRecords, ...valueRecords]) {
+        expect(rec.attributes[AttrInstallId], String(tier)).toBe(id)
+      }
+      expect(counterAdds.length + measureRecords.length + valueRecords.length).toBe(5)
+    }
+  })
+
+  it('is never attached below Tier.Basic', async () => {
+    const { client, counterAdds, measureRecords, valueRecords } = capturingClient(Tier.Anonymous)
+    client.recordSessionStart()
+    await client.flush(500)
+    recordAll(client)
+    await client.flush(500)
+    for (const rec of [...counterAdds, ...measureRecords, ...valueRecords]) {
+      expect(rec.attributes).not.toHaveProperty(AttrInstallId)
+      expect(rec.attributes).not.toHaveProperty(AttrSessionId)
+    }
+  })
+
+  it('is loaded off the caller: the first metric goes without it', async () => {
+    const { client, counterAdds } = capturingClient(Tier.Basic)
+    client.recordCounter('before', 1)
+    await client.flush(500)
+    client.recordCounter('after', 1)
+    await client.flush(500)
+    expect(counterAdds[0]?.attributes).not.toHaveProperty(AttrInstallId)
+    expect(counterAdds[1]?.attributes[AttrInstallId]).toMatch(/^[0-9a-f-]{36}$/)
+  })
+})
