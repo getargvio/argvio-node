@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.8.0](https://github.com/getargvio/argvio-node/compare/argvio-v0.7.0...argvio-v0.8.0) (2026-11-07)
+
+
+### Features
+
+* **core:** module-level counter, duration and value handles ([87cc41a](https://github.com/getargvio/argvio-node/commit/87cc41a89f9ef9219d059c399318037d2094eb53))
+* **core:** module-level counter, duration and value handles ([a2c9a29](https://github.com/getargvio/argvio-node/commit/a2c9a29067fdc9054b35e8474895cd4d680c79dd))
+
 ## [0.7.0](https://github.com/getargvio/argvio-node/compare/argvio-v0.6.0...argvio-v0.7.0) (2026-11-02)
 
 
