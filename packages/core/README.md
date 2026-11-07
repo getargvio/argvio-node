@@ -97,6 +97,36 @@ const perScan = client.value('scan.findings', { dims: ['severity'] })
 perScan.record(0, { severity: 'critical' })
 ```
 
+To declare metrics at module level, before any client exists, use the
+top-level `counter`, `duration` and `value`. They return the same handles,
+bound lazily to the default client: the one `createClient` returned last
+(pass `setAsDefault: false` to leave it alone, as a library should; use
+`setDefaultClient` to set or reset it, e.g. in tests). They do nothing until
+there is a default client, and when telemetry is disabled:
+
+```ts
+import { counter, duration, value } from '@getargvio/argvio'
+
+const vulnsFound = counter('vulns.found', { dims: ['severity', 'check'] })
+const scanTime = duration('scan.time', { dims: ['kind'] })
+const opsInSpec = value('spec.operations')
+
+vulnsFound.add(1, { severity: 'high', check: 'bola' })
+opsInSpec.record(42)
+
+const stop = scanTime.start({ kind: 'openapi' })
+try {
+  await scan()
+} finally {
+  stop() // records the elapsed time, once
+}
+
+// Dimension values only known at the end:
+const stopLate = scanTime.startLate()
+const kind = await scan()
+stopLate({ kind })
+```
+
 > **Warning: counters, timings and their dimensions are accepted at the
 > anonymous tier.** They are sent at every tier, including `Anonymous` and in
 > CI, with no consent choice made. Names, labels and dimensions must be fixed

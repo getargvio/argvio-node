@@ -11,6 +11,7 @@ import { resolveConfig } from './options.js'
 import { buildExporters } from './otlp.js'
 import { buildResource } from './resource.js'
 import { isDoNotTrackRequested } from './consentEnv.js'
+import { setDefaultClient } from './defaultClient.js'
 import { detectEnvironment } from './environment.js'
 import type { AuthState, Lazy } from './sessionFacts.js'
 import { resolveAuthState, resolveConfigCustomizedCount } from './sessionFacts.js'
@@ -1044,6 +1045,11 @@ function disabledClient(initError: Error | null = null): Client {
  * inspect `initError` but are not required to before using the returned
  * Client safely.
  *
+ * The returned Client also becomes the default one, the target of the
+ * module-level `counter`, `duration` and `value` handles, replacing any
+ * earlier default. Pass `setAsDefault: false` to leave the default alone
+ * (libraries, several clients).
+ *
  * `createClient` resolves consent through a synchronous
  * {@link ConsentProvider} — see that interface's doc comment for why
  * resolution has to be synchronous on Node's single-threaded event loop.
@@ -1053,6 +1059,17 @@ export function createClient(
   cliName: string,
   cliVersion: string,
   options: ClientOptions = {},
+): Client {
+  const client = buildClient(apiKey, cliName, cliVersion, options)
+  if (options?.setAsDefault !== false) setDefaultClient(client)
+  return client
+}
+
+function buildClient(
+  apiKey: string,
+  cliName: string,
+  cliVersion: string,
+  options: ClientOptions,
 ): Client {
   try {
     const cfg = resolveConfig(apiKey, cliName, cliVersion, options)
