@@ -103,6 +103,13 @@ export interface ClientOptions {
    * send nothing.
    */
   authState?: Lazy<AuthState>
+  /**
+   * Whether the Client `createClient` returns becomes the default client,
+   * the one the module-level `counter`, `duration` and `value` handles send
+   * through. Defaults to `true`; pass `false` for a library, or when several
+   * clients coexist and another should stay the default.
+   */
+  setAsDefault?: boolean
 }
 
 export interface ResolvedConfig {

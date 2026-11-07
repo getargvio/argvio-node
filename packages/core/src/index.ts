@@ -10,6 +10,10 @@ export type {
   ValueHandle,
 } from './client.js'
 
+export { counter, duration, value } from './metrics.js'
+export type { TimerHandle } from './metrics.js'
+export { getDefaultClient, setDefaultClient } from './defaultClient.js'
+
 export type { ClientOptions, Transport } from './options.js'
 export { AuthState, isValidAuthState, MAX_CONFIG_CUSTOMIZED_COUNT } from './sessionFacts.js'
 export type { Lazy } from './sessionFacts.js'
