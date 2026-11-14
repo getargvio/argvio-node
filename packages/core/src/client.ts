@@ -1,7 +1,7 @@
 import { SpanStatusCode } from '@opentelemetry/api'
-import type { Attributes, Counter, Histogram, Tracer } from '@opentelemetry/api'
+import type { Counter, Histogram, Tracer } from '@opentelemetry/api'
 import { SeverityNumber } from '@opentelemetry/api-logs'
-import type { Logger } from '@opentelemetry/api-logs'
+import type { LogAttributes, Logger } from '@opentelemetry/api-logs'
 import { LoggerProvider, BatchLogRecordProcessor } from '@opentelemetry/sdk-logs'
 import { MeterProvider, PeriodicExportingMetricReader } from '@opentelemetry/sdk-metrics'
 import { NodeTracerProvider, BatchSpanProcessor } from '@opentelemetry/sdk-trace-node'
@@ -89,6 +89,13 @@ import { ARGVIO_DEBUG, DroppedCounters, safeRun } from './safety.js'
 const INSTRUMENTATION_NAME = '@getargvio/argvio'
 
 type Job = () => void | Promise<void>
+
+/**
+ * Attribute map used for spans, metrics and log records. `@opentelemetry/api`
+ * 1.10 widened its own `Attributes` to `unknown` values, while the logs API
+ * still requires `AnyValue`; the stricter logs shape satisfies both.
+ */
+type Attributes = LogAttributes
 
 /**
  * A small in-process bounded async queue: `push` never blocks the
@@ -368,7 +375,7 @@ export class Client {
     return true
   }
 
-  private tierAttr(): Attributes {
+  private tierAttr(): Record<string, string> {
     return { [RESOURCE_ATTR_TIER]: tierToString(this.tier) }
   }
 
