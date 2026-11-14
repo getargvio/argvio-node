@@ -13,6 +13,6 @@
   "dependencies": {
     "@getargvio/argvio": "workspace:*",
     "@getargvio/commander": "workspace:*",
-    "commander": "^15"
+    "commander": "^15.1.0"
   }
 }

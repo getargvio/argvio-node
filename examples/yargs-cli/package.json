@@ -13,6 +13,6 @@
   "dependencies": {
     "@getargvio/argvio": "workspace:*",
     "@getargvio/yargs": "workspace:*",
-    "yargs": "^18"
+    "yargs": "^18.2.0"
   }
 }
