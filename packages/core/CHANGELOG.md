@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/getargvio/argvio-node/compare/argvio-v0.8.0...argvio-v0.8.1) (2026-11-14)
+
+
+### Bug Fixes
+
+* **deps:** keep vitest on 4.x since 5.x drops the bench API ([7ebb80b](https://github.com/getargvio/argvio-node/commit/7ebb80b7b095d61f0ca7abeb1fc0df6bf305f962))
+
 ## [0.8.0](https://github.com/getargvio/argvio-node/compare/argvio-v0.7.0...argvio-v0.8.0) (2026-11-07)
 
 
